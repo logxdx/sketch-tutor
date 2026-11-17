@@ -1,0 +1,203 @@
+import { z } from "zod"
+
+/**
+ * Input schemas shared by the server (tool definitions sent to the model) and
+ * the browser (typed tool parts, rendering). No server-only imports here.
+ */
+
+export const COLORS = ["black", "blue", "red", "green", "orange", "purple", "teal", "gray"] as const
+export const color = z.enum(COLORS).optional().describe("Ink color; use it with consistent meaning.")
+
+const point = z.object({ x: z.number(), y: z.number() })
+
+export const shapeSchema = z.object({
+  id: z
+    .string()
+    .optional()
+    .describe('Short id you choose (e.g. "nucleus"). Needed if an arrow connects to it or you refer to it later.'),
+  kind: z.enum(["rect", "ellipse", "diamond", "text", "arrow", "line"]),
+  x: z.number().optional().describe("Left edge in PANEL coordinates (panel ≈ 800 wide × 600 tall)."),
+  y: z.number().optional().describe("Top edge in PANEL coordinates."),
+  w: z.number().optional().describe("Width (shapes) or max text width."),
+  h: z.number().optional().describe("Height (shapes)."),
+  text: z
+    .string()
+    .optional()
+    .describe("text: the words. rect/ellipse/diamond: label inside. arrow: label on it. Short; \\n for new lines."),
+  from: z.string().optional().describe("arrow/line: id of the shape it starts at (new or already on the board)."),
+  to: z.string().optional().describe("arrow/line: id of the shape it ends at (new or already on the board)."),
+  points: z
+    .array(point)
+    .optional()
+    .describe("arrow/line without from/to: 2+ points in PANEL coordinates."),
+  color,
+  fill: z.boolean().optional().describe("Soft fill for shapes."),
+  size: z.enum(["s", "m", "l", "xl"]).optional().describe("Text size; m default, l/xl for titles."),
+  dashed: z.boolean().optional(),
+})
+
+// ---------------------------------------------------------------- board
+
+export const drawInput = z.object({
+  title: z.string().describe("Short title for this step, shown in the lesson outline."),
+  shapes: z.array(shapeSchema).min(1).max(40),
+  placement: z.enum(["below", "right"]).optional().describe("Where relative to existing content. Default below."),
+  near: z.string().optional().describe("Id of a board element to place this panel next to."),
+})
+
+export const plotInput = z.object({
+  title: z.string().optional(),
+  functions: z
+    .array(
+      z.object({
+        expr: z.string().describe('Expression in x (math.js), e.g. "2*x^2 - 5*x + 3", "sin(x)".'),
+        label: z.string().optional(),
+        color,
+      })
+    )
+    .min(1)
+    .max(4),
+  xMin: z.number(),
+  xMax: z.number(),
+  yMin: z.number().optional(),
+  yMax: z.number().optional(),
+  xLabel: z.string().optional(),
+  yLabel: z.string().optional(),
+  points: z.array(z.object({ x: z.number(), y: z.number(), label: z.string().optional() })).max(8).optional(),
+  near: z.string().optional(),
+})
+
+export const annotateInput = z.object({
+  targets: z.array(z.string()).min(1).describe("Ids of board elements to mark."),
+  style: z.enum(["circle", "underline", "check", "cross", "highlight", "arrow"]),
+  note: z.string().optional().describe("Short note written next to the mark."),
+  color,
+})
+
+export const pointAtInput = z.object({
+  targets: z.array(z.string()).min(1),
+  caption: z.string().optional().describe("A few words shown beside your cursor."),
+})
+
+export const eraseInput = z.object({
+  ids: z.array(z.string()).optional(),
+  all: z.boolean().optional(),
+})
+
+export const askStudentInput = z.object({
+  task: z.string().describe("What the student should draw or write, in one sentence."),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  near: z.string().optional(),
+})
+
+export const quizInput = z.object({
+  question: z.string(),
+  options: z.array(z.string()).min(2).max(6),
+  correctIndex: z.number().int().describe("0-based index of the correct option."),
+  explanation: z.string().describe("Why the correct answer is right (shown after answering)."),
+})
+
+// ---------------------------------------------------------- rich media
+
+const vec3 = z.array(z.number()).length(3).describe("[x, y, z]; y is up.")
+
+export const scene3dObject = z.object({
+  kind: z.enum([
+    "sphere",
+    "box",
+    "cylinder",
+    "cone",
+    "torus",
+    "plane",
+    "vector",
+    "line",
+    "point",
+    "label",
+    "surface",
+    "curve",
+  ]),
+  position: vec3.optional(),
+  rotation: vec3.optional().describe("Degrees about x, y, z."),
+  size: z.number().optional().describe("Radius (sphere/cylinder/cone/torus/point) or edge length (box/plane)."),
+  dims: vec3.optional().describe("box: width,height,depth; cylinder/cone: radius,height,0."),
+  color: z.string().optional().describe("CSS color, e.g. '#1971c2' or 'tomato'."),
+  opacity: z.number().optional(),
+  wireframe: z.boolean().optional(),
+  label: z.string().optional().describe("Text label floating next to the object."),
+  from: vec3.optional().describe("vector/line start."),
+  to: vec3.optional().describe("vector/line end."),
+  points: z.array(vec3).optional().describe("line: polyline points."),
+  expr: z
+    .string()
+    .optional()
+    .describe(
+      'surface: height y = f(x, z) e.g. "sin(x)*cos(z)". curve: parametric "[cos(t), t/4, sin(t)]" in t.'
+    ),
+  range: z
+    .object({ min: z.number(), max: z.number() })
+    .optional()
+    .describe("surface: x and z range; curve: t range."),
+  spin: z.number().optional().describe("Self rotation speed (radians/s about y)."),
+  orbit: z
+    .object({ center: vec3, radius: z.number(), speed: z.number() })
+    .optional()
+    .describe("Orbit around a point in the horizontal plane (radians/s)."),
+})
+
+export const show3dInput = z.object({
+  title: z.string(),
+  caption: z.string().optional().describe("One-line explanation of what to notice."),
+  objects: z.array(scene3dObject).min(1).max(80),
+  showAxes: z.boolean().optional(),
+  showGrid: z.boolean().optional(),
+  camera: vec3.optional().describe("Camera position; it looks at the origin."),
+  autoRotate: z.boolean().optional(),
+})
+
+export const chartInput = z.object({
+  title: z.string(),
+  kind: z.enum(["bar", "stacked-bar", "line", "area", "scatter"]),
+  data: z
+    .array(z.record(z.string(), z.union([z.string(), z.number()])))
+    .min(1)
+    .max(200)
+    .describe("Rows, e.g. [{year: 1990, gdp: 5.9}, ...]."),
+  xKey: z.string().describe("Field used for the x axis / categories."),
+  series: z
+    .array(z.object({ key: z.string(), label: z.string().optional() }))
+    .min(1)
+    .max(6)
+    .describe("Numeric fields to plot (≤3 for scatter)."),
+  xLabel: z.string().optional(),
+  yLabel: z.string().optional(),
+  caption: z.string().optional(),
+  source: z.string().optional().describe("Where the numbers come from (cite your research)."),
+})
+
+export const exploreInput = z.object({
+  title: z.string(),
+  expr: z.string().describe('y as a function of x and parameters, e.g. "a*sin(b*x + c)".'),
+  params: z
+    .array(
+      z.object({
+        name: z.string(),
+        min: z.number(),
+        max: z.number(),
+        step: z.number().optional(),
+        value: z.number(),
+        label: z.string().optional(),
+      })
+    )
+    .min(1)
+    .max(5),
+  xMin: z.number(),
+  xMax: z.number(),
+  yMin: z.number().optional(),
+  yMax: z.number().optional(),
+  caption: z.string().optional().describe("What to try: \"Drag b and watch the period change\"."),
+})
+
+export const suggestRepliesInput = z.object({
+  options: z.array(z.string()).min(2).max(4),
+})
