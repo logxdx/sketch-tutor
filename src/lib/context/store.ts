@@ -1,6 +1,6 @@
 import "server-only"
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import type { Extracted } from "./extract"
@@ -97,15 +97,36 @@ function chunkDoc(docId: string, ex: Extracted): Chunk[] {
   return chunks
 }
 
+/** Where a document's original bytes live (PDFs keep them so pages can be rendered later). */
+export const originalPath = (libraryId: string, docId: string) => join(DATA_DIR, libraryId, "files", `${docId}.pdf`)
+export const pageCachePath = (libraryId: string, docId: string, page: number) =>
+  join(DATA_DIR, libraryId, "pages", `${docId}-${page}.png`)
+
+async function deleteFiles(libraryId: string, docIds: string[]) {
+  for (const id of docIds) {
+    await rm(originalPath(libraryId, id), { force: true }).catch(() => {})
+  }
+  // Page renders are a cache: drop them for these docs.
+  const pagesDir = join(DATA_DIR, libraryId, "pages")
+  const cached = await readdir(pagesDir).catch(() => [] as string[])
+  await Promise.all(
+    cached.filter((f) => docIds.some((id) => f.startsWith(`${id}-`))).map((f) => rm(join(pagesDir, f), { force: true }))
+  )
+}
+
 export async function addDocument(
   libraryId: string,
   file: { name: string; path: string; size: number },
-  ex: Extracted
+  ex: Extracted,
+  original?: Uint8Array
 ): Promise<LibraryDocMeta> {
   const lib = await getLibrary(libraryId)
   // Re-uploading the same path replaces the old version.
   const existing = lib.docs.find((d) => d.path === file.path)
-  if (existing) removeFrom(lib, existing.id)
+  if (existing) {
+    removeFrom(lib, existing.id)
+    await deleteFiles(libraryId, [existing.id])
+  }
   if (lib.docs.length >= LIMITS.maxDocsPerLibrary) throw new Error("Library is full (3000 documents).")
   const id = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
   const chars = ex.pages.reduce((s, p) => s + p.length, 0)
@@ -120,6 +141,11 @@ export async function addDocument(
     pages: ex.kind === "pdf" ? ex.pages.length : undefined,
     addedAt: Date.now(),
   }
+  if (original && ex.kind === "pdf") {
+    await mkdir(join(DATA_DIR, libraryId, "files"), { recursive: true })
+    await writeFile(originalPath(libraryId, id), original)
+    meta.viewable = true
+  }
   lib.docs.push(meta)
   lib.chunks.push(...chunkDoc(id, ex))
   scheduleSave(libraryId)
@@ -133,13 +159,36 @@ function removeFrom(lib: Library, docId: string) {
 
 export async function removeDocuments(libraryId: string, docIds: string[] | "all") {
   const lib = await getLibrary(libraryId)
-  if (docIds === "all") {
-    lib.docs = []
-    lib.chunks = []
-  } else {
-    for (const id of docIds) removeFrom(lib, id)
-  }
+  const ids = docIds === "all" ? lib.docs.map((d) => d.id) : docIds
+  for (const id of ids) removeFrom(lib, id)
   scheduleSave(libraryId)
+  await deleteFiles(libraryId, ids)
+}
+
+/** Per-page skim of a PDF (headings, else the first line) so the tutor can navigate big documents. */
+export async function outlineDocument(libraryId: string, docId: string, maxPages = 150) {
+  const lib = await getLibrary(libraryId)
+  const doc = lib.docs.find((d) => d.id === docId)
+  if (!doc) return null
+  const byPage = new Map<number, string>()
+  for (const c of lib.chunks) {
+    if (c.docId !== docId) continue
+    const key = c.page ?? 1
+    byPage.set(key, (byPage.get(key) ?? "") + c.text.slice(0, CHUNK_CHARS))
+  }
+  const entries = [...byPage]
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, maxPages)
+    .map(([page, text]) => {
+      const headings = text
+        .split("\n")
+        .filter((l) => /^#{1,4}\s/.test(l))
+        .map((l) => l.replace(/^#+\s*/, "").trim())
+        .slice(0, 4)
+      const first = text.split("\n").find((l) => l.trim().length > 3)?.trim() ?? ""
+      return { page, chars: text.length, summary: (headings.length ? headings.join(" · ") : first).slice(0, 160) }
+    })
+  return { doc, entries, truncated: byPage.size > maxPages }
 }
 
 // ------------------------------------------------------------------ search

@@ -1,6 +1,6 @@
 import "server-only"
 
-import { generateText, isStepCount, ToolLoopAgent } from "ai"
+import { isStepCount, ToolLoopAgent } from "ai"
 
 import { createLibraryTools } from "@/lib/context/tools"
 import { clientTools } from "./client-tools"
@@ -8,6 +8,7 @@ import { getModel, modelId, usingGroq } from "./models"
 import { buildInstructions } from "./prompt"
 import { createServerTools } from "./server-tools"
 import type { Mode, Subject } from "./types"
+import { askVision, fromDataUrl } from "./vision"
 
 /**
  * Stage 1 of the pipeline — perception. A vision model reads the latest
@@ -15,18 +16,9 @@ import type { Mode, Subject } from "./types"
  * reports it as text for the reasoning model.
  */
 export async function readBoard(snapshot: string, boardText: string | null | undefined, signal?: AbortSignal) {
-  const { text } = await generateText({
-    model: getModel("vision"),
-    abortSignal: signal,
-    maxOutputTokens: 700,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "file", data: new URL(snapshot), mediaType: "image/jpeg" },
-          {
-            type: "text",
-            text: `You are the eyes of a tutor. This is the shared whiteboard. Element list for reference (S = student, T = tutor):
+  return askVision(
+    [fromDataUrl(snapshot)],
+    `You are the eyes of a tutor. This is the shared whiteboard. Element list for reference (S = student, T = tutor):
 ${boardText || "(none)"}
 
 Describe what is on the board for the tutor, focusing on the STUDENT's work (S elements, freehand strokes, handwriting):
@@ -34,34 +26,17 @@ Describe what is on the board for the tutor, focusing on the STUDENT's work (S e
 - Describe sketches/diagrams and what they seem to represent; mention element ids where you can match them.
 - Point out anything that looks incorrect or unfinished.
 Be concise: bullet points, no preamble.`,
-          },
-        ],
-      },
-    ],
-  })
-  return text.trim()
+    signal
+  )
 }
 
 /** Perception for photos/screenshots the student attached (when the tutor model can't see images). */
 export async function describeImages(images: string[], signal?: AbortSignal) {
-  const { text } = await generateText({
-    model: getModel("vision"),
-    abortSignal: signal,
-    maxOutputTokens: 900,
-    messages: [
-      {
-        role: "user",
-        content: [
-          ...images.map((url) => ({ type: "file" as const, data: new URL(url), mediaType: url.slice(5, url.indexOf(";")) || "image/jpeg" })),
-          {
-            type: "text" as const,
-            text: `You are the eyes of a tutor. The student attached ${images.length > 1 ? "these images" : "this image"} (photo of homework, textbook page, diagram, screenshot…). For each image (number them), transcribe all text and maths exactly (LaTeX for maths) and describe any figures, graphs or diagrams precisely enough to teach from. Bullet points, no preamble.`,
-          },
-        ],
-      },
-    ],
-  })
-  return text.trim()
+  return askVision(
+    images.map(fromDataUrl),
+    `You are the eyes of a tutor. The student attached ${images.length > 1 ? "these images" : "this image"} (photo of homework, textbook page, diagram, screenshot…). For each image (number them), transcribe all text and maths exactly (LaTeX for maths) and describe any figures, graphs or diagrams precisely enough to teach from. Bullet points, no preamble.`,
+    signal
+  )
 }
 
 /**

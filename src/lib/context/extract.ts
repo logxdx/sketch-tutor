@@ -1,12 +1,14 @@
 import "server-only"
 
+import { parsePdf } from "./liteparse"
 import { DOC_EXTENSIONS, extOf, LIMITS, type DocKind } from "./types"
 
 export type Extracted = {
   kind: DocKind
-  /** One entry per page (PDF) or a single entry (text). */
+  /** One entry per page (PDF, as Markdown) or a single entry (text). */
   pages: string[]
-  title?: string
+  /** Printed page labels ("iv", "A-1") where the PDF defines them. */
+  labels?: (string | undefined)[]
 }
 
 const CODE = new Set([
@@ -17,27 +19,24 @@ const DATA = new Set(["csv", "tsv", "json", "yaml", "yml", "toml", "xml"])
 
 export class SkipError extends Error {}
 
+/** PDFs go through LiteParse: per-page Markdown from the layout, with local OCR for scanned pages. */
 async function extractPdf(bytes: Uint8Array): Promise<Extracted> {
-  const { getDocumentProxy } = await import("unpdf")
-  const pdf = await getDocumentProxy(bytes)
-  const meta = await pdf.getMetadata().catch(() => null)
-  const info = meta?.info && typeof meta.info === "object" ? (meta.info as Record<string, unknown>) : null
+  let parsed
+  try {
+    parsed = await parsePdf(bytes)
+  } catch (e) {
+    const msg = (e as Error).message
+    throw new SkipError(/password/i.test(msg) ? "password-protected PDF" : `unreadable PDF (${msg.slice(0, 80)})`)
+  }
+  // Keep one entry per page (empty pages included) so page numbers stay aligned.
   const pages: string[] = []
-  const max = Math.min(pdf.numPages, 800)
-  for (let i = 1; i <= max; i++) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
-    // Keep line breaks where the PDF has them, so tables and equations stay readable.
-    let text = ""
-    for (const item of content.items as { str?: string; hasEOL?: boolean }[]) {
-      text += (item.str ?? "") + (item.hasEOL ? "\n" : " ")
-    }
-    pages.push(text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim())
+  for (const p of parsed.pages) pages[p.page - 1] = p.markdown
+  for (let i = 0; i < parsed.totalPages; i++) pages[i] ??= ""
+  if (!pages.some((p) => p.length > 10)) {
+    // Still useful: the tutor can look at the pages with library_view_page.
+    pages[0] = "(No text could be extracted, even with OCR — use library_view_page to look at the pages.)"
   }
-  if (!pages.some((p) => p.length > 20)) {
-    throw new SkipError("no extractable text (scanned PDF?) — attach the pages as images instead")
-  }
-  return { kind: "pdf", pages, title: typeof info?.Title === "string" ? info.Title.trim() || undefined : undefined }
+  return { kind: "pdf", pages, labels: parsed.pages.map((p) => p.label) }
 }
 
 function extractNotebook(raw: string): string {

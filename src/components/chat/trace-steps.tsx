@@ -2,6 +2,9 @@
 
 import {
   BookOpenTextIcon,
+  ListTreeIcon,
+  PinIcon,
+  ScanEyeIcon,
   BrainIcon,
   CalculatorIcon,
   CircleDotIcon,
@@ -37,6 +40,11 @@ import {
   TraceLine,
   TraceTitle,
 } from "@/components/ui/trace"
+import { markdownPlugins } from "@/lib/markdown"
+import { Streamdown } from "streamdown"
+import { toast } from "@ui-sdk/react/toast"
+
+import { Button } from "@/components/ui/button"
 import type { TutorUIMessage } from "@/lib/agent/types"
 import { useTutor } from "./tutor-context"
 
@@ -59,6 +67,8 @@ export const STEP_TOOLS = new Set([
   "look_closer",
   "library_search",
   "library_read",
+  "library_outline",
+  "library_view_page",
 ])
 
 /** Tools the browser executes (still running while the board animates, after the stream ends). */
@@ -150,6 +160,51 @@ const STEP: Record<
     running: (i) => `Reading ${i?.file ?? "your file"}`,
     done: (i, o) => `Read ${(o as { file?: string })?.file ?? i?.file ?? ""} ${(o as { span?: string })?.span ? `(${(o as { span: string }).span})` : ""}`,
   },
+  library_outline: {
+    icon: <ListTreeIcon />,
+    running: (i) => `Skimming ${i?.file ?? "your file"}`,
+    done: (i, o) => `Skimmed ${(o as { file?: string })?.file ?? i?.file ?? ""} (${(o as { pages?: number })?.pages ?? "?"} pages)`,
+  },
+  library_view_page: {
+    icon: <ScanEyeIcon />,
+    running: (i) => `Looking at page ${i?.page ?? "?"} of ${i?.file ?? "your file"}`,
+    done: (i, o) => `Looked at page ${i?.page ?? "?"} of ${(o as { file?: string })?.file ?? i?.file ?? ""}`,
+  },
+}
+
+/** The page screenshot the tutor looked at, with what it saw and a way to put it on the board. */
+function PageView({ out }: { out: { file: string; page: number; pages: number; question: string; answer: string; imageUrl: string } }) {
+  const { board } = useTutor()
+  return (
+    <div className="space-y-2">
+      <a href={out.imageUrl} target="_blank" rel="noreferrer" className="block w-fit">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={out.imageUrl}
+          alt={`Page ${out.page} of ${out.file}`}
+          className="max-h-80 rounded-md border bg-white shadow-xs"
+          loading="lazy"
+        />
+      </a>
+      <p className="text-xs">
+        <span className="font-medium text-foreground">Asked:</span> {out.question}
+      </p>
+      <Streamdown plugins={{ math: markdownPlugins.math }} className="prose-chat text-sm">
+        {out.answer}
+      </Streamdown>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() =>
+          board
+            ?.addImage({ url: out.imageUrl, title: `${out.file} — page ${out.page}` })
+            .catch((e: Error) => toast.error("Couldn't pin the page", { description: e.message }))
+        }
+      >
+        <PinIcon /> Pin page to board
+      </Button>
+    </div>
+  )
 }
 
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
@@ -222,6 +277,19 @@ function StepDetails({ name, part }: { name: string; part: ToolPart }) {
       )
     case "library_read":
       return <JsonBlock title={`${out.file} · ${out.span}`} value={out.text} />
+    case "library_view_page":
+      return <PageView out={out as Parameters<typeof PageView>[0]["out"]} />
+    case "library_outline":
+      return (
+        <ol className="max-h-64 space-y-0.5 overflow-y-auto text-xs">
+          {((out.outline as { page: number; summary: string }[]) ?? []).map((e) => (
+            <li key={e.page} className="flex gap-2">
+              <span className="w-8 shrink-0 text-right font-mono tabular-nums">p{e.page}</span>
+              <span className="min-w-0 truncate">{e.summary || "—"}</span>
+            </li>
+          ))}
+        </ol>
+      )
     case "web_fetch":
       return <JsonBlock title={String(out.title || out.url)} value={String(out.content ?? "").slice(0, 4000)} />
     case "look_closer":

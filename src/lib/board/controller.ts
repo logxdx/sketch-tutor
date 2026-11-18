@@ -828,12 +828,18 @@ export class BoardController {
     })
   }
 
-  /** Pin an image (e.g. from find_images) onto the board, with a caption. */
+  /** Pin an image (Wikimedia result, PDF page, attachment) onto the board, with a caption. */
   addImage(src: { url: string; title: string; width?: number; height?: number; credit?: string }) {
     return this.enqueue("Pinning image", async () => {
-      const res = await fetch(`/api/image?url=${encodeURIComponent(src.url)}`)
+      // Same-origin (PDF page renders) and data URLs load directly; remote images go through the proxy.
+      const direct = src.url.startsWith("/") || src.url.startsWith("data:")
+      const res = await fetch(direct ? src.url : `/api/image?url=${encodeURIComponent(src.url)}`)
       if (!res.ok) throw new Error(`Could not load image (${res.status})`)
       const blob = await res.blob()
+      if (!src.width || !src.height) {
+        const bitmap = await createImageBitmap(blob).catch(() => null)
+        if (bitmap) src = { ...src, width: bitmap.width, height: bitmap.height }
+      }
       const dataURL = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(reader.result as string)

@@ -16,7 +16,7 @@ it watch you draw and nudge you along.
 | **Graphs & data** | Hand-drawn function plots on the board; slider explorers for `y = f(x, params)`; bar/line/area/scatter charts with tooltips and a table view. |
 | **Sources & images** | Web search, page/PDF reading and a research sub-agent with numbered citations; openly licensed Wikimedia images you can pin onto the board. |
 | **Exact maths** | math.js engine for arithmetic, units, simplification, derivatives and roots. |
-| **Your material** | Attach photos of homework, screenshots, PDFs, notes and code — or a whole course folder. Images go straight to the model; documents are extracted (PDFs page by page), indexed in your **library**, and the tutor searches and cites them (`[L1]`, file + page) with `library_search` / `library_read`. |
+| **Your material** | Attach photos of homework, screenshots, PDFs, notes and code — or a whole course folder. Images go straight to the model; documents are indexed in your **library**. The tutor works it agentically — `library_search` to find, `library_outline` to navigate a long PDF, `library_read` for exact text, and `library_view_page` to **screenshot a page and look at it** (figures, equations, tables, scans) — and cites it (`[L1]`, file + page). |
 | **Teaching modes** | *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
 
 ## How it works
@@ -43,10 +43,16 @@ useChat ── board state + snapshot ──────┼──────►
   automatic fallback, and TinyFish → Readability/Turndown (HTML, PDF, Next.js RSC) → Jina fetch.
   Keys come from the same keyring entries (`secret-tool … service pi-web-search`), then env.
   A server-side SSRF guard blocks fetches to local/private addresses.
-- **Context library:** `POST /api/library` extracts text (PDF via `unpdf`, text/code/notebooks), chunks it
-  and keeps a BM25 index per browser library (`.data/library/<id>.json`, git-ignored). Small files
-  attached to a message are put in the prompt in full; everything is searchable by the agent.
-  Folders are walked in the browser (skipping `node_modules`, `.git`, binaries) and uploaded in batches.
+- **Context library:** `POST /api/library` extracts text, chunks it and keeps a BM25 index per browser
+  library (`.data/library/`, git-ignored). PDFs go through [LiteParse](https://github.com/run-llama/liteparse)
+  (`@llamaindex/liteparse`, Rust + PDFium Node bindings): per-page Markdown rebuilt from the layout,
+  with local Tesseract OCR for scanned pages — no cloud calls. The original PDF is kept so
+  `GET /api/library/page` can render any page (cached PNG) for `library_view_page`, the chat, and the
+  board. Small files attached to a message are put in the prompt in full. Folders are walked in the
+  browser (skipping `node_modules`, `.git`, binaries) and uploaded in batches.
+  Try the parser directly: `node scripts/liteparse-smoke.mjs file.pdf [page]`.
+  Env: `LITEPARSE_OCR=false` to disable OCR, `LITEPARSE_OCR_LANG` (Tesseract code, default `eng`),
+  `LITEPARSE_PAGE_DPI` (page renders, default 110).
 - **Agent UI:** shadcn's agent components — **Trace** (every reasoning step and tool call, following the
   official Tool / Reasoning / Sources patterns), **Code Block**, **Message**, **Bubble**, **Attachment**,
   **Marker**, **Message Scroller**, plus the Prompt Input, Suggestion and File Tree patterns.

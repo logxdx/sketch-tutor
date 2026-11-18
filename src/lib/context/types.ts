@@ -12,6 +12,8 @@ export type LibraryDocMeta = {
   chars: number
   pages?: number
   addedAt: number
+  /** The original PDF is kept, so pages can be rendered as images. */
+  viewable?: boolean
 }
 
 /** What a user message carries about files attached to it (rendered as Attachment cards). */

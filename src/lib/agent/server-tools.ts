@@ -1,9 +1,9 @@
 import "server-only"
 
-import { generateText, tool } from "ai"
+import { tool } from "ai"
 import { z } from "zod"
 
-import { getModel } from "./models"
+import { askVision, fromDataUrl } from "./vision"
 import { chartInput, exploreInput, show3dInput, suggestRepliesInput } from "./schemas"
 import { createResearchTool, webFetchTool, webSearchTool } from "./web/tools"
 
@@ -206,23 +206,12 @@ export function createServerTools(ctx: { snapshot: string | null; images: string
       execute: async ({ question, image }, { abortSignal }) => {
         const url = image ? ctx.images[image - 1] : ctx.snapshot
         if (!url) return { answer: image ? `There is no attached image #${image}.` : "No board picture is available for this turn." }
-        const { text } = await generateText({
-          model: getModel("vision"),
-          abortSignal,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "file", data: new URL(url), mediaType: url.slice(5, url.indexOf(";")) || "image/jpeg" },
-                {
-                  type: "text",
-                  text: `${image ? "This is an image the student shared with their tutor." : "This is a shared whiteboard between a tutor and a student."} ${question}\nAnswer precisely and briefly; transcribe handwriting exactly.`,
-                },
-              ],
-            },
-          ],
-        })
-        return { answer: text }
+        const answer = await askVision(
+          [fromDataUrl(url)],
+          `${image ? "This is an image the student shared with their tutor." : "This is a shared whiteboard between a tutor and a student."} ${question}\nAnswer precisely and briefly; transcribe handwriting exactly.`,
+          abortSignal
+        )
+        return { answer }
       },
     }),
 

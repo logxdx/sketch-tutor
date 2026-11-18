@@ -1,8 +1,7 @@
 "use client"
 
 import { EyeIcon, FileCodeIcon, FileTextIcon, FolderIcon, ImageIcon, SheetIcon } from "lucide-react"
-import { math } from "@streamdown/math"
-import { mermaid } from "@streamdown/mermaid"
+import { markdownPlugins } from "@/lib/markdown"
 import { Streamdown } from "streamdown"
 
 import {
@@ -24,7 +23,7 @@ import { SourcesFooter } from "./sources"
 import { MEDIA_TOOLS, MediaPartView } from "./tool-cards"
 import { ReasoningLine, STEP_TOOLS, StepLine, StepTrace, type ToolPart } from "./trace-steps"
 
-const plugins = { math, mermaid }
+const plugins = markdownPlugins
 
 type Part = TutorUIMessage["parts"][number]
 

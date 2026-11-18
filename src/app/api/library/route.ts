@@ -34,8 +34,10 @@ export async function POST(req: Request) {
   for (const [i, file] of files.entries()) {
     const path = (paths[i] || file.name).replace(/^\/+/, "").slice(0, 512)
     try {
-      const extracted = await extractFile(file.name, file.type, new Uint8Array(await file.arrayBuffer()))
-      result.docs.push(await addDocument(libraryId, { name: file.name, path, size: file.size }, extracted))
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const extracted = await extractFile(file.name, file.type, bytes)
+      // PDFs keep their original bytes so the tutor can look at pages later.
+      result.docs.push(await addDocument(libraryId, { name: file.name, path, size: file.size }, extracted, bytes))
     } catch (e) {
       const reason = e instanceof SkipError ? e.message : `could not read (${(e as Error).message.slice(0, 120)})`
       result.skipped.push({ path, reason })

@@ -3,7 +3,16 @@ import "server-only"
 import { tool } from "ai"
 import { z } from "zod"
 
-import { findDocument, fullText, listDocuments, readDocument, searchLibrary } from "./store"
+import { askVision } from "@/lib/agent/vision"
+import { getPageImage, pageImageUrl } from "./pages"
+import {
+  findDocument,
+  fullText,
+  listDocuments,
+  outlineDocument,
+  readDocument,
+  searchLibrary,
+} from "./store"
 import type { MessageAttachment } from "./types"
 
 export type LibraryHit = {
@@ -73,6 +82,51 @@ export function createLibraryTools(libraryId: string | null) {
         return { file: doc.path, docId: doc.id, span: out!.span, text: out!.text }
       },
     }),
+
+    library_outline: tool({
+      description:
+        "Skim a PDF page by page (headings, or the first line of each page) to find where a topic, chapter, figure or exercise is before reading or viewing pages. Use it to navigate long textbooks and slide decks.",
+      inputSchema: z.object({ file: z.string().describe("File name, path or id.") }),
+      execute: async ({ file }) => {
+        if (!libraryId) throw new Error("The student has no library.")
+        const doc = await findDocument(libraryId, file)
+        if (!doc) throw new Error(`No file matching "${file}" in the library.`)
+        const out = await outlineDocument(libraryId, doc.id)
+        return { file: doc.path, docId: doc.id, pages: doc.pages ?? 1, outline: out!.entries, truncated: out!.truncated }
+      },
+    }),
+
+    library_view_page: tool({
+      description:
+        "Look at a page of one of the student's PDFs as an image (a screenshot of the page) and ask a vision model about it. Use it whenever the text isn't enough: figures, diagrams, graphs, circuit/chemical drawings, equations, tables, handwriting, scanned pages, or when extracted text looks garbled. The page is also shown to the student, who can pin it to the board.",
+      inputSchema: z.object({
+        file: z.string().describe("File name, path or id."),
+        page: z.number().int().min(1),
+        question: z
+          .string()
+          .describe("What to find out from the page, e.g. 'Transcribe equation (3.4) exactly' or 'Describe Figure 2 and its axes'."),
+      }),
+      execute: async ({ file, page, question }, { abortSignal }) => {
+        if (!libraryId) throw new Error("The student has no library.")
+        const doc = await findDocument(libraryId, file)
+        if (!doc) throw new Error(`No file matching "${file}" in the library.`)
+        const { png } = await getPageImage(libraryId, doc.id, page)
+        const answer = await askVision(
+          [{ data: new Uint8Array(png), mediaType: "image/png" }],
+          `This is page ${page} of "${doc.path}", from a student's study material. ${question}\nBe precise: transcribe text and maths exactly (LaTeX for maths), describe figures with their labels and axes. No preamble.`,
+          abortSignal
+        )
+        return {
+          file: doc.path,
+          docId: doc.id,
+          page,
+          pages: doc.pages ?? 1,
+          question,
+          answer,
+          imageUrl: pageImageUrl(libraryId, doc.id, page),
+        }
+      },
+    }),
   }
 }
 
@@ -92,7 +146,7 @@ export async function librarySection(libraryId: string | null, attached: Message
     (d) => `- ${d.path} (${d.kind}${d.pages ? `, ${d.pages} pages` : ""}, ${fmtSize(d.size)})`
   )
   const parts = [
-    `STUDENT'S LIBRARY (${docs.length} file${docs.length > 1 ? "s" : ""}${docs.length > shown.length ? `, newest ${shown.length} listed` : ""}) — search it with library_search, read with library_read, cite as [L1]:`,
+    `STUDENT'S LIBRARY (${docs.length} file${docs.length > 1 ? "s" : ""}${docs.length > shown.length ? `, newest ${shown.length} listed` : ""}) — search with library_search, navigate PDFs with library_outline, read with library_read, look at pages with library_view_page (figures, equations, tables, scans), cite as [L1]:`,
     ...lines,
   ]
 
