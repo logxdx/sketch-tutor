@@ -58,6 +58,10 @@ npm run dev                    # http://localhost:3000
 Defaults on Groq: `openai/gpt-oss-120b` (tutor), `meta-llama/llama-4-scout-17b-16e-instruct`
 (vision), `openai/gpt-oss-20b` (research) — override any of them in `.env.local`.
 
+**OpenRouter:** set `TUTOR_PROVIDER=openrouter`, `OPENROUTER_API_KEY` and a `TUTOR_MODEL`, e.g.
+`deepseek/deepseek-v4.1-flash` (tool calling + image input, so one model covers tutor, vision and
+research). Any other OpenAI-compatible endpoint works via `OPENAI_COMPATIBLE_BASE_URL`.
+
 **Web search without keys:** the keyless `ddgs` metasearch needs a Python venv. If you already set
 it up for pi it is reused automatically; otherwise:
 
