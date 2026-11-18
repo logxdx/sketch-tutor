@@ -2,7 +2,7 @@
 .env
 .env*.local
 
-# python (legacy)
+# python (ddgs search venv)
 __pycache__
 .venv
 

@@ -122,7 +122,6 @@ src/lib/agent/web/             web search / fetch / research, ported from the pi
 src/lib/board/                 BoardController: animated drawing, layout, plots, snapshots
 src/components/                workspace, whiteboard, chat + tool cards, 3D/chart/explorer
 src/components/ui-sdk/         UI SDK components styled with shadcn tokens
-legacy/                        the original Streamlit math tutor (Python)
 ```
 
 ## License
