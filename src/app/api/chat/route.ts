@@ -6,6 +6,7 @@ import {
 } from "ai"
 
 import { getModel, modelId, providerFor, tutorSeesImages, visionEnabled } from "@/lib/agent/models"
+import { derivePlan } from "@/lib/agent/plan"
 import { parseSettings } from "@/lib/agent/settings"
 import { createTutorAgent, describeImages, readBoard } from "@/lib/agent/tutor-agent"
 import { BOARD_SNAPSHOT_NAME, type ChatRequestBody, type TutorUIMessage } from "@/lib/agent/types"
@@ -131,6 +132,7 @@ export async function POST(req: Request) {
         libraryId,
         snapshot,
         images: uploads,
+        plan: derivePlan(messages),
         settings,
       })
       const agentStream = await createAgentUIStream({

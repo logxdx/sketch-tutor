@@ -3,11 +3,9 @@
 import {
   BarChart3Icon,
   BoxIcon,
-  CheckCircle2Icon,
   ImageIcon,
   PinIcon,
   SlidersHorizontalIcon,
-  XCircleIcon,
 } from "lucide-react"
 import dynamic from "next/dynamic"
 import * as React from "react"
@@ -19,9 +17,10 @@ import { Button } from "@/components/ui/button"
 import { Trace, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace"
 import { ChartView } from "@/components/viz/chart-view"
 import { Explorer } from "@/components/viz/explorer"
-import type { chartInput, exploreInput, quizInput, show3dInput } from "@/lib/agent/schemas"
+import type { chartInput, exploreInput, show3dInput } from "@/lib/agent/schemas"
 import type { TutorUIMessage } from "@/lib/agent/types"
 import { cn } from "@/lib/utils"
+import { QuestionCard } from "./question-card"
 import { useTutor } from "./tutor-context"
 
 const Scene3D = dynamic(() => import("@/components/viz/scene-3d"), {
@@ -214,54 +213,6 @@ function ExplorerCard({ part }: { part: PartOf<"explore"> }) {
   )
 }
 
-function QuizCard({ part }: { part: PartOf<"quiz"> }) {
-  const { answerQuiz } = useTutor()
-  const input = part.input as z.infer<typeof quizInput> | undefined
-  const answered = part.state === "output-available" ? part.output : null
-  const [picked, setPicked] = React.useState<number | null>(null)
-  if (!input?.options?.length || part.state === "input-streaming") {
-    return <Building icon={<CheckCircle2Icon />}>Writing a question</Building>
-  }
-  const chosenIndex = (answered as { chosenIndex?: number } | null)?.chosenIndex ?? picked
-  const done = chosenIndex !== null && chosenIndex !== undefined
-  return (
-    <Card icon={<CheckCircle2Icon />} title="Quick check" subtitle={done ? undefined : "Pick an answer"}>
-      <p className="mb-3 text-sm font-medium">{input.question}</p>
-      <div className="grid gap-1.5">
-        {input.options.map((opt, i) => {
-          const isCorrect = i === input.correctIndex
-          const isChosen = i === chosenIndex
-          return (
-            <button
-              key={i}
-              type="button"
-              disabled={done}
-              onClick={() => {
-                setPicked(i)
-                answerQuiz(part.toolCallId, { chosenIndex: i, chosen: opt, correct: isCorrect })
-              }}
-              className={cn(
-                "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                !done && "hover:border-primary/50 hover:bg-accent",
-                done && isCorrect && "border-emerald-500/50 bg-emerald-500/10",
-                done && isChosen && !isCorrect && "border-destructive/50 bg-destructive/10"
-              )}
-            >
-              <span className="flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-medium">
-                {String.fromCharCode(65 + i)}
-              </span>
-              <span className="flex-1">{opt}</span>
-              {done && isCorrect ? <CheckCircle2Icon className="size-4 text-emerald-600" aria-label="Correct" /> : null}
-              {done && isChosen && !isCorrect ? <XCircleIcon className="size-4 text-destructive" aria-label="Your answer" /> : null}
-            </button>
-          )
-        })}
-      </div>
-      {done ? <p className="mt-3 text-sm text-muted-foreground">{input.explanation}</p> : null}
-    </Card>
-  )
-}
-
 /** shadcn Suggestion pattern: outline pill buttons under the last reply. */
 export function SuggestedReplies({ part }: { part: PartOf<"suggest_replies"> }) {
   const { send, busy } = useTutor()
@@ -289,7 +240,7 @@ export function MediaPartView({ part, isLast }: { part: ToolPart; isLast: boolea
     case "explore":
       return <ExplorerCard part={part as PartOf<"explore">} />
     case "quiz":
-      return <QuizCard part={part as PartOf<"quiz">} />
+      return <QuestionCard part={part as PartOf<"quiz">} />
     case "suggest_replies":
       return isLast ? <SuggestedReplies part={part as PartOf<"suggest_replies">} /> : null
     default:

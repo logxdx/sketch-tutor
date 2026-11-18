@@ -11,6 +11,7 @@ import {
   MousePointerClickIcon,
   PenLineIcon,
   RotateCcwIcon,
+  RouteIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 import * as React from "react"
@@ -34,6 +35,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller"
+import { planProgress, topoOrder, type PlanStatus } from "@/lib/agent/plan"
 import type { TutorUIMessage } from "@/lib/agent/types"
 import type { BoardStatus } from "@/lib/board/types"
 import { fromDataTransfer } from "@/lib/context/client"
@@ -54,7 +56,40 @@ const STARTERS = [
   { icon: <HandIcon />, text: "Quiz me on solving quadratic equations — I'll write on the board." },
 ]
 
-function EmptyState({ onAddContext }: { onAddContext: () => void }) {
+/** "Learn" entry point: name a goal, and the tutor measures, maps a route and teaches it. */
+function LearnCard({ onStart }: { onStart: (goal: string) => void }) {
+  const [goal, setGoal] = React.useState("")
+  return (
+    <form
+      className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-3"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (goal.trim()) onStart(goal.trim())
+      }}
+    >
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <RouteIcon className="size-4 text-primary" aria-hidden /> Learn something properly
+      </div>
+      <p className="text-xs text-pretty text-muted-foreground">
+        I&apos;ll check what you already know, map a route to your goal on the board, then teach it one step at a time.
+      </p>
+      <div className="flex gap-1.5">
+        <input
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="e.g. why the chain rule works"
+          aria-label="What do you want to understand?"
+          className="h-8 min-w-0 flex-1 rounded-lg border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        />
+        <Button type="submit" size="sm" disabled={!goal.trim()}>
+          Start
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function EmptyState({ onAddContext, onStartLearning }: { onAddContext: () => void; onStartLearning: (goal: string) => void }) {
   const { send } = useTutor()
   return (
     <div className="flex min-h-full flex-col justify-center gap-6 px-2 py-8">
@@ -69,6 +104,7 @@ function EmptyState({ onAddContext }: { onAddContext: () => void }) {
         </p>
       </div>
       <div className="grid gap-2">
+        <LearnCard onStart={onStartLearning} />
         {STARTERS.map((s) => (
           <button
             key={s.text}
@@ -93,9 +129,82 @@ function EmptyState({ onAddContext }: { onAddContext: () => void }) {
   )
 }
 
+const PIP: Record<PlanStatus, string> = {
+  done: "bg-emerald-500",
+  known: "bg-emerald-500/60",
+  current: "bg-orange-500",
+  todo: "bg-muted-foreground/25",
+}
+const STATUS_LABEL: Record<PlanStatus, string> = { done: "Understood", known: "Already knew", current: "Now", todo: "To come" }
+
+/** Slim progress bar for the route, above the lesson. Click to see the map on the board. */
+function RouteBar() {
+  const { plan, board } = useTutor()
+  if (!plan) return null
+  const { done, total, finished } = planProgress(plan)
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]))
+  const current = plan.current ? byId.get(plan.current) : undefined
+  return (
+    <button
+      type="button"
+      onClick={() => board?.focusRoute()}
+      title={`Route: ${plan.goal} — show the map on the board`}
+      className="flex w-full shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-1.5 text-left text-xs transition-colors hover:bg-muted/60"
+    >
+      <RouteIcon className="size-3.5 shrink-0 text-primary" aria-hidden />
+      <span className="min-w-0 truncate">
+        {finished ? (
+          <span className="font-medium">Route complete: {plan.goal}</span>
+        ) : (
+          <>
+            <span className="text-muted-foreground">Now: </span>
+            <span className="font-medium">{current?.title ?? plan.goal}</span>
+          </>
+        )}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-0.5" aria-hidden>
+        {topoOrder(plan.nodes).map((id) => (
+          <span key={id} className={cn("h-1.5 w-3 rounded-full", PIP[byId.get(id)!.status])} />
+        ))}
+      </span>
+      <span className="shrink-0 tabular-nums text-muted-foreground">
+        {done}/{total}
+      </span>
+    </button>
+  )
+}
+
+function RouteList() {
+  const { plan, board } = useTutor()
+  if (!plan) return null
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]))
+  return (
+    <section className="border-b p-4">
+      <button type="button" onClick={() => board?.focusRoute()} className="mb-2 flex items-center gap-1.5 text-left text-sm font-medium hover:text-primary">
+        <RouteIcon className="size-4 text-primary" aria-hidden /> Route: {plan.goal}
+      </button>
+      <ol className="space-y-1.5">
+        {topoOrder(plan.nodes).map((id) => {
+          const n = byId.get(id)!
+          return (
+            <li key={id} className="flex gap-2.5 text-sm">
+              <span className={cn("mt-1.5 size-2.5 shrink-0 rounded-full", PIP[n.status], n.status === "current" && "ring-4 ring-orange-500/20")} />
+              <span className="min-w-0">
+                <span className={cn(n.status === "current" && "font-medium")}>{n.title}</span>
+                <span className="ml-1.5 text-[11px] text-muted-foreground">{STATUS_LABEL[n.status]}</span>
+                {n.summary ? <span className="block text-xs text-muted-foreground">{n.summary}</span> : null}
+              </span>
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
 function Outline({ board }: { board: BoardStatus }) {
-  const { board: controller } = useTutor()
-  if (!board.steps.length) {
+  const { board: controller, plan } = useTutor()
+  if (!board.steps.length && !plan) {
     return (
       <p className="px-4 py-10 text-center text-sm text-muted-foreground">
         Every drawing, graph and task Sketch puts on the board shows up here. Click one to jump to it.
@@ -104,6 +213,8 @@ function Outline({ board }: { board: BoardStatus }) {
   }
   const last = board.steps.length - 1
   return (
+    <>
+    <RouteList />
     <Timeline aria-label="Lesson outline" className="p-4">
       {board.steps.map((s, i) => (
         <TimelineItem
@@ -125,6 +236,7 @@ function Outline({ board }: { board: BoardStatus }) {
         </TimelineItem>
       ))}
     </Timeline>
+    </>
   )
 }
 
@@ -141,6 +253,7 @@ export function ChatPanel({
   onRetry,
   settings,
   onOpenSettings,
+  onStartLearning,
 }: {
   messages: TutorUIMessage[]
   status: "submitted" | "streaming" | "ready" | "error"
@@ -152,6 +265,7 @@ export function ChatPanel({
   onRetry: () => void
   settings: SettingsApi
   onOpenSettings: () => void
+  onStartLearning: (goal: string) => void
 }) {
   const { send } = useTutor()
   const [view, setView] = React.useState<View>("lesson")
@@ -217,6 +331,7 @@ export function ChatPanel({
         ) : null}
       </div>
 
+      {view === "lesson" && messages.length ? <RouteBar /> : null}
       <div className="min-h-0 flex-1">
         {view === "outline" ? (
           <div className="h-full overflow-y-auto">
@@ -230,7 +345,7 @@ export function ChatPanel({
           />
         ) : messages.length === 0 ? (
           <div className="mx-auto h-full max-w-xl overflow-y-auto px-4">
-            <EmptyState onAddContext={() => pickers.current?.files()} />
+            <EmptyState onAddContext={() => pickers.current?.files()} onStartLearning={onStartLearning} />
           </div>
         ) : (
           <MessageScrollerProvider autoScroll>

@@ -93,10 +93,41 @@ export const askStudentInput = z.object({
 
 export const quizInput = z.object({
   question: z.string(),
-  options: z.array(z.string()).min(2).max(6),
-  correctIndex: z.number().int().describe("0-based index of the correct option."),
-  explanation: z.string().describe("Why the correct answer is right (shown after answering)."),
+  kind: z
+    .enum(["choice", "recall"])
+    .optional()
+    .describe("choice (default) = multiple choice; recall = the student writes the answer in their own words."),
+  options: z
+    .array(z.string())
+    .min(2)
+    .max(6)
+    .optional()
+    .describe("choice: the options (shown shuffled). Make wrong options real misconceptions, not jokes."),
+  correctIndex: z.number().int().optional().describe("choice: 0-based index of the correct option."),
+  answer: z
+    .string()
+    .optional()
+    .describe("recall: the answer you commit to BEFORE seeing theirs (shown to them after they answer; you judge theirs against it)."),
+  explanation: z.string().describe("Why the right answer is right (shown after answering)."),
+  purpose: z
+    .enum(["probe", "check"])
+    .optional()
+    .describe("probe = measuring what they already know before teaching; check = testing what you just taught (default)."),
+  step: z.string().optional().describe("Id of the route step this question is about, if there is a route."),
 })
+
+/** What the student sends back from a question card. */
+export type QuizAnswer = {
+  kind: "choice" | "recall"
+  /** "I don't know yet" — they skipped rather than guess. */
+  skipped?: boolean
+  chosenIndex?: number
+  chosen?: string
+  correct?: boolean
+  answer?: string
+  confidence?: "guessing" | "fairly sure" | "certain"
+  reasoning?: string
+}
 
 // ---------------------------------------------------------- rich media
 

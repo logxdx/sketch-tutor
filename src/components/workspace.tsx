@@ -7,6 +7,7 @@ import {
   GaugeIcon,
   GraduationCapIcon,
   HandIcon,
+  HistoryIcon,
   LayoutGridIcon,
   MessageCircleQuestionIcon,
   MoonIcon,
@@ -25,11 +26,22 @@ import { toast } from "@ui-sdk/react/toast"
 
 import { ChatPanel } from "@/components/chat/chat-panel"
 import { TutorContext, type TutorActions } from "@/components/chat/tutor-context"
+import { LessonHistory } from "@/components/lessons/lesson-history"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { CommandPalette, type PaletteAction } from "@/components/ui-sdk/command-palette"
 import { IconButton, PickList, Segmented, Toggle } from "@/components/ui-sdk/controls"
+import { derivePlan } from "@/lib/agent/plan"
 import { BOARD_SNAPSHOT_NAME, MODES, SUBJECTS, type Mode, type Subject, type TutorUIMessage } from "@/lib/agent/types"
 import { useLibrary } from "@/lib/context/use-library"
+import type { LessonRecord } from "@/lib/lessons/types"
+import {
+  currentLessonId,
+  messagesForSaving,
+  newLessonId,
+  rememberCurrentLesson,
+  settleInterrupted,
+  useLessons,
+} from "@/lib/lessons/use-lessons"
 import { useSettings } from "@/lib/settings/use-settings"
 import type { BoardController, ToolResult } from "@/lib/board/controller"
 import { playDemo } from "@/lib/board/demo"
@@ -44,6 +56,14 @@ const Whiteboard = dynamic(() => import("@/components/board/whiteboard"), {
 })
 
 /** Board tools the browser executes (quiz waits for a click instead). */
+/** Cheap fingerprint of the conversation: changes whenever a message or part is added or grows. */
+function conversationSignature(messages: TutorUIMessage[]) {
+  const last = messages.at(-1)
+  if (!last) return ""
+  const tail = last.parts.at(-1)
+  return `${messages.length}:${last.id}:${last.parts.length}:${tail ? JSON.stringify(tail).length : 0}`
+}
+
 const BOARD_TOOLS = new Set(["draw", "plot", "annotate", "point_at", "erase", "ask_student"])
 const WATCH_IDLE_MS = 3500
 
@@ -217,7 +237,8 @@ export function Workspace() {
       autoTurns.current = 0
       setStatusLabel(null)
       const attachments = extras?.attachments?.length ? extras.attachments : undefined
-      sendMessage({ text, files: files.length ? files : undefined, metadata: { kind, attachments } })
+      const sharedBoard = files.some((f) => f.filename === BOARD_SNAPSHOT_NAME) || undefined
+      sendMessage({ text, files: files.length ? files : undefined, metadata: { kind, attachments, sharedBoard } })
       b?.markSeen({ closeTask: kind === "check" })
     },
     [sendMessage]
@@ -254,12 +275,152 @@ export function Workspace() {
   useShortcut("escape", () => busy && stopAll(), { description: "Stop the tutor", when: () => busy })
   useShortcut("mod+,", () => setSettingsOpen(true), { description: "Open settings" })
 
-  const newLesson = React.useCallback(() => {
+  // ------------------------------------------------------------ the route
+
+  // The route lives in the conversation (plan tool outputs); the board map follows it.
+  const plan = React.useMemo(() => derivePlan(messages), [messages])
+  const planKey = plan ? JSON.stringify(plan) : ""
+  React.useEffect(() => {
+    if (board && plan) board.renderPlan(plan).catch(() => {})
+    // planKey stands in for plan: redraw only when the route actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board, planKey])
+
+  // --------------------------------------------------------- saved lessons
+
+  const lessons = useLessons()
+  const { save: saveLesson, load: loadLesson } = lessons
+  const [historyOpen, setHistoryOpen] = React.useState(false)
+  // The id is never rendered on the server, so picking it lazily from storage can't cause a hydration mismatch.
+  const [lessonId, setLessonIdState] = React.useState(() =>
+    typeof window === "undefined" ? "" : (currentLessonId() ?? newLessonId())
+  )
+  const lessonIdRef = React.useRef(lessonId)
+  const createdAtRef = React.useRef(0)
+  const messagesRef = React.useRef(messages)
+  React.useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+  const setLessonId = React.useCallback((id: string) => {
+    lessonIdRef.current = id
+    setLessonIdState(id)
+    rememberCurrentLesson(id)
+  }, [])
+
+  /** What the conversation looked like at the last save/load (unchanged → don't reorder the history). */
+  const savedSigRef = React.useRef("")
+  /** While a saved lesson is being put back, its own changes aren't new edits. */
+  const restoringRef = React.useRef(false)
+  const saveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const saveNow = React.useCallback(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = null
+    const msgs = messagesRef.current
+    if (!msgs.length || !lessonIdRef.current || restoringRef.current) return
+    if (!createdAtRef.current) createdAtRef.current = Date.now()
+    const sig = conversationSignature(msgs)
+    const keepTime = sig === savedSigRef.current
+    savedSigRef.current = sig
+    saveLesson(lessonIdRef.current, {
+      ...settings.current,
+      keepTime,
+      createdAt: createdAtRef.current,
+      messages: messagesForSaving(msgs),
+      board: boardRef.current?.exportState() ?? null,
+    }).catch((e: Error) => console.warn("[lessons] save failed:", e.message))
+  }, [saveLesson])
+
+  /** Debounced when idle; while the tutor streams, at most every few seconds. */
+  const scheduleSave = React.useCallback(
+    (delay: number, throttle = false) => {
+      if (restoringRef.current) return
+      if (throttle && saveTimer.current) return
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(saveNow, delay)
+    },
+    [saveNow]
+  )
+
+  React.useEffect(() => {
+    if (messages.length) scheduleSave(busy ? 4000 : 800, busy)
+  }, [messages, busy, scheduleSave])
+
+  React.useEffect(() => {
+    if (!board) return
+    return board.subscribeScene(() => {
+      if (messagesRef.current.length) scheduleSave(busyRef.current ? 4000 : 1500, true)
+    })
+  }, [board, scheduleSave])
+
+  const applyLesson = React.useCallback(
+    (record: LessonRecord) => {
+      restoringRef.current = true
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = null
+      boardRef.current?.loadState(record.board)
+      const restored = settleInterrupted(record.messages)
+      savedSigRef.current = conversationSignature(restored)
+      setMessages(restored)
+      if (SUBJECTS.some((s) => s.value === record.subject)) setSubject(record.subject as Subject)
+      if (MODES.some((m) => m.value === record.mode)) setMode(record.mode as Mode)
+      createdAtRef.current = record.createdAt
+      autoTurns.current = 0
+      setLessonId(record.id)
+      setTimeout(() => {
+        restoringRef.current = false
+      }, 800)
+    },
+    [setMessages, setLessonId]
+  )
+
+  // On load: pick up where this browser left off.
+  const restoredRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!board || restoredRef.current) return
+    restoredRef.current = true
+    const id = lessonIdRef.current
+    rememberCurrentLesson(id)
+    loadLesson(id).then((record) => {
+      if (!record) return
+      // Already chatting before the saved lesson arrived: keep that as a new lesson.
+      if (messagesRef.current.length) setLessonId(newLessonId())
+      else applyLesson(record)
+    })
+  }, [board, loadLesson, applyLesson, setLessonId])
+
+  const newLesson = React.useCallback(
+    ({ save = true }: { save?: boolean } = {}) => {
+    if (save) saveNow()
+    else if (saveTimer.current) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
     stopAll()
+    savedSigRef.current = ""
     setMessages([])
     board?.clearBoard()
-    toast("New lesson", { description: "Fresh board, fresh conversation." })
-  }, [board, setMessages, stopAll])
+    createdAtRef.current = Date.now()
+    setLessonId(newLessonId())
+    if (save) toast("New lesson", { description: "Fresh board, fresh conversation. The last one is in your history." })
+    },
+    [board, setMessages, stopAll, saveNow, setLessonId]
+  )
+
+  const openLesson = React.useCallback(
+    async (id: string) => {
+      if (id === lessonIdRef.current) return
+      saveNow()
+      const record = await loadLesson(id)
+      if (!record) {
+        toast.error("Couldn't open that lesson")
+        return
+      }
+      stopAll()
+      applyLesson(record)
+    },
+    [loadLesson, saveNow, stopAll, applyLesson]
+  )
 
   const setSpeed = (speed: DrawSpeed) => {
     board?.setSpeed(speed)
@@ -267,7 +428,28 @@ export function Workspace() {
   }
 
   const actions: PaletteAction[] = [
-    { id: "new", group: "Lesson", label: "New lesson", icon: <PlusIcon />, shortcut: "mod+shift+o", run: newLesson },
+    { id: "new", group: "Lesson", label: "New lesson", icon: <PlusIcon />, shortcut: "mod+shift+o", run: () => newLesson() },
+    {
+      id: "history",
+      group: "Lesson",
+      label: "Lesson history — open a past lesson",
+      icon: <HistoryIcon />,
+      keywords: ["saved", "previous", "chats", "open"],
+      run: () => setHistoryOpen(true),
+    },
+    ...lessons.lessons
+      .filter((l) => l.id !== lessonId)
+      .slice(0, 8)
+      .map((l) => ({
+        id: `open-${l.id}`,
+        group: "Recent lessons",
+        label: l.title,
+        icon: <HistoryIcon />,
+        run: () => void openLesson(l.id),
+      })),
+    ...(plan
+      ? [{ id: "route", group: "Lesson", label: "Show the route on the board", icon: <LayoutGridIcon />, run: () => board?.focusRoute() }]
+      : []),
     {
       id: "explain-selection",
       group: "Lesson",
@@ -327,7 +509,10 @@ export function Workspace() {
     }
   }
 
-  const ctx = React.useMemo<TutorActions>(() => ({ board, busy, send, answerQuiz }), [board, busy, send, answerQuiz])
+  const ctx = React.useMemo<TutorActions>(
+    () => ({ board, busy, send, answerQuiz, plan }),
+    [board, busy, send, answerQuiz, plan]
+  )
 
   const boardPane = (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">
@@ -400,6 +585,12 @@ export function Workspace() {
       library={library}
       settings={settingsApi}
       onOpenSettings={() => setSettingsOpen(true)}
+      onStartLearning={(goal) => {
+        setMode("learn")
+        // The request body reads this ref; update it now rather than after the re-render.
+        settings.current = { ...settings.current, mode: "learn" }
+        send(`I want to learn: ${goal}`)
+      }}
       onStop={stopAll}
       onRetry={() => regenerate()}
     />
@@ -409,6 +600,9 @@ export function Workspace() {
     <TutorContext.Provider value={ctx}>
       <div className="flex h-dvh flex-col">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b bg-background px-3">
+          <IconButton label="Lesson history" onClick={() => setHistoryOpen(true)}>
+            <HistoryIcon />
+          </IconButton>
           <div className="flex items-center gap-2 pr-1">
             <div className="flex size-7 items-center justify-center rounded-lg bg-tutor font-[cursive] text-base font-bold text-white shadow-sm">
               S
@@ -434,7 +628,7 @@ export function Workspace() {
             <IconButton label="Settings" shortcut="mod+," onClick={() => setSettingsOpen(true)}>
               <Settings2Icon />
             </IconButton>
-            <IconButton label="New lesson" onClick={newLesson}>
+            <IconButton label="New lesson" onClick={() => newLesson()}>
               <PlusIcon />
             </IconButton>
           </div>
@@ -463,6 +657,15 @@ export function Workspace() {
         api={settingsApi}
         speed={boardStatus.speed}
         onSpeedChange={(sp) => board?.setSpeed(sp)}
+      />
+      <LessonHistory
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        api={lessons}
+        currentId={lessonId}
+        onOpenLesson={(id) => void openLesson(id)}
+        onNewLesson={() => newLesson()}
+        onCurrentDeleted={() => newLesson({ save: false })}
       />
     </TutorContext.Provider>
   )

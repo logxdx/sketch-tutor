@@ -3,15 +3,18 @@ import type { InferUITools, UIMessage } from "ai"
 import type { createLibraryTools } from "@/lib/context/tools"
 import type { MessageAttachment } from "@/lib/context/types"
 import type { clientTools } from "./client-tools"
+import type { PlanTools } from "./plan-tools"
 import type { ServerTools } from "./server-tools"
 
-export type TutorTools = typeof clientTools & ServerTools & ReturnType<typeof createLibraryTools>
+export type TutorTools = typeof clientTools & ServerTools & PlanTools & ReturnType<typeof createLibraryTools>
 
 export type TutorMessageMetadata = {
   /** chat = typed; watch = automatic nudge while the student draws; check = "check my work". */
   kind?: "chat" | "watch" | "check"
   /** Library documents / folders attached to this message. */
   attachments?: MessageAttachment[]
+  /** A board snapshot went with this message (the image itself isn't kept in saved lessons). */
+  sharedBoard?: boolean
   /** Assistant replies: which model, provider and thinking level produced them. */
   model?: string
   provider?: string
@@ -43,6 +46,7 @@ export const SUBJECTS = [
 export type Subject = (typeof SUBJECTS)[number]["value"]
 
 export const MODES = [
+  { value: "learn", label: "Learn", hint: "Checks what you know, maps a route, then teaches step by step" },
   { value: "explain", label: "Explain", hint: "Tutor leads, draws and shows" },
   { value: "guide", label: "Guide", hint: "Socratic: you do the thinking" },
   { value: "quiz", label: "Quiz", hint: "Practice questions, marked live" },

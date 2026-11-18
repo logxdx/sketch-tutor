@@ -17,6 +17,7 @@ import {
   LineChartIcon,
   MousePointer2Icon,
   PenLineIcon,
+  RouteIcon,
   SearchIcon,
   SparklesIcon,
 } from "lucide-react"
@@ -69,6 +70,8 @@ export const STEP_TOOLS = new Set([
   "library_read",
   "library_outline",
   "library_view_page",
+  "plan_lesson",
+  "plan_update",
 ])
 
 /** Tools the browser executes (still running while the board animates, after the stream ends). */
@@ -164,6 +167,30 @@ const STEP: Record<
     icon: <ListTreeIcon />,
     running: (i) => `Skimming ${i?.file ?? "your file"}`,
     done: (i, o) => `Skimmed ${(o as { file?: string })?.file ?? i?.file ?? ""} (${(o as { pages?: number })?.pages ?? "?"} pages)`,
+  },
+  plan_lesson: {
+    icon: <RouteIcon />,
+    running: () => "Mapping the route",
+    done: (i, o) =>
+      (o as { ok?: boolean })?.ok
+        ? `Mapped the route: ${i?.goal ?? ""} (${(i?.nodes as unknown[] | undefined)?.length ?? "?"} steps)`
+        : "Route needs fixing",
+  },
+  plan_update: {
+    icon: <RouteIcon />,
+    running: () => "Updating the route",
+    done: (i, o) => {
+      const out = o as { ok?: boolean; plan?: { nodes: { id: string; title: string }[] }; next?: string | null }
+      if (!out?.ok) return "Route update needs fixing"
+      const title = (id: string) => out.plan?.nodes.find((n) => n.id === id)?.title ?? id
+      const done = [...((i?.done as string[]) ?? []), ...((i?.known as string[]) ?? [])]
+      const bits = [
+        done.length ? `Understood: ${done.map(title).join(", ")}` : "",
+        (i?.reopen as string[] | undefined)?.length ? `Revisit: ${(i!.reopen as string[]).map(title).join(", ")}` : "",
+        out.next ? `Now: ${title(out.next)}` : "",
+      ].filter(Boolean)
+      return bits.join(" · ") || "Updated the route"
+    },
   },
   library_view_page: {
     icon: <ScanEyeIcon />,

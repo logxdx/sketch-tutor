@@ -5,6 +5,8 @@ import { isStepCount, ToolLoopAgent } from "ai"
 import { createLibraryTools } from "@/lib/context/tools"
 import { clientTools } from "./client-tools"
 import { callSettings, getModel, modelId, usingGroq } from "./models"
+import type { LessonPlan } from "./plan"
+import { createPlanTools } from "./plan-tools"
 import { buildInstructions } from "./prompt"
 import { createServerTools } from "./server-tools"
 import type { TutorSettings } from "./settings"
@@ -62,6 +64,7 @@ export function createTutorAgent(opts: {
   libraryId: string | null
   snapshot: string | null
   images: string[]
+  plan: LessonPlan | null
   settings: TutorSettings
 }) {
   const { settings } = opts
@@ -87,6 +90,7 @@ export function createTutorAgent(opts: {
     tools: {
       ...clientTools,
       ...serverTools,
+      ...createPlanTools(opts.plan),
       ...createLibraryTools(opts.libraryId, settings),
     },
     stopWhen: isStepCount(settings.agent.maxSteps),

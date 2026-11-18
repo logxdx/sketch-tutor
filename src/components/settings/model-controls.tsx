@@ -20,6 +20,7 @@ import type { SettingsApi } from "@/lib/settings/use-settings"
 
 /** Short display name for a model id ("deepseek/deepseek-v4.1-flash" → "deepseek-v4.1-flash"). */
 const shortName = (id: string) => id.split("/").at(-1) || id
+const noSubscribe = () => () => {}
 
 /** shadcn Model Selector pattern: model and effort dropdowns in the composer. */
 export function ModelControls({ api, onOpenSettings }: { api: SettingsApi; onOpenSettings: () => void }) {
@@ -31,8 +32,14 @@ export function ModelControls({ api, onOpenSettings }: { api: SettingsApi; onOpe
     (e, i, all) => e.id && configured.has(e.provider) && all.findIndex((x) => x.provider === e.provider && x.id === e.id) === i
   )
   const groups = PROVIDERS.map((p) => ({ ...p, models: entries.filter((e) => e.provider === p.id) })).filter((g) => g.models.length)
-  const level = REASONING_LEVELS.find((l) => l.value === settings.reasoning) ?? REASONING_LEVELS[0]
-  const name = api.modelInfo(tutorModel)?.name ?? shortName(tutorModel)
+  // Settings come from this browser's storage: show them only after hydration so server and client HTML match.
+  const hydrated = React.useSyncExternalStore(
+    noSubscribe,
+    () => true,
+    () => false
+  )
+  const level = (hydrated && REASONING_LEVELS.find((l) => l.value === settings.reasoning)) || REASONING_LEVELS[0]
+  const name = hydrated ? (api.modelInfo(tutorModel)?.name ?? shortName(tutorModel)) : ""
 
   return (
     <>

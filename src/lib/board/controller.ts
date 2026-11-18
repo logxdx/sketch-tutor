@@ -4,6 +4,7 @@ import {
   convertToExcalidrawElements,
   exportToBlob,
   newElementWith,
+  restoreElements,
 } from "@excalidraw/excalidraw"
 import type { ExcalidrawElementSkeleton } from "@excalidraw/excalidraw/data/transform"
 import type {
@@ -13,11 +14,13 @@ import type {
 } from "@excalidraw/excalidraw/element/types"
 import type {
   AppState,
+  BinaryFileData,
   Collaborator,
   ExcalidrawImperativeAPI,
   SocketId,
 } from "@excalidraw/excalidraw/types"
 
+import { planLayers, type LessonPlan, type PlanStatus } from "@/lib/agent/plan"
 import type { COLORS } from "@/lib/agent/schemas"
 import {
   type Box,
@@ -35,6 +38,7 @@ import { plotToShapes } from "./plot"
 import type {
   AnnotateInput,
   AskStudentInput,
+  BoardSnapshot,
   BoardStatus,
   DrawInput,
   DrawShape,
@@ -78,6 +82,18 @@ const TUTOR_COLOR = { background: "#ede9fe", stroke: "#7c3aed" }
 const SPEED: Record<DrawSpeed, number> = { relaxed: 1.6, normal: 1, fast: 0.45, instant: 0 }
 
 const isTutor = (el: El) => el.customData?.author === "tutor"
+
+/** Route map styling per step status. */
+const ROUTE_STYLE: Record<PlanStatus, { stroke: string; fill: string; width: number }> = {
+  done: { stroke: "#2f9e44", fill: "#d3f9d8", width: 2 },
+  known: { stroke: "#2f9e44", fill: "#d3f9d8", width: 2 },
+  current: { stroke: "#e8590c", fill: "#fff3bf", width: 4 },
+  todo: { stroke: "#868e96", fill: "transparent", width: 2 },
+}
+
+/** Changes when the route's shape (not its progress) changes — then the map is redrawn. */
+const routeSignature = (plan: LessonPlan) =>
+  JSON.stringify([plan.goal, plan.nodes.map((n) => [n.id, n.title, n.needs])])
 /**
  * One animation frame. Browsers pause rAF in background tabs, so race it with a
  * timer — a hidden tab must never stall the agent loop waiting for a drawing.
@@ -173,6 +189,17 @@ export class BoardController {
 
   getStatus = () => this.status
 
+  private sceneVersion = 0
+  private sceneListeners = new Set<() => void>()
+
+  /** Fires whenever anything on the board changes (for saving the lesson). */
+  subscribeScene = (fn: () => void) => {
+    this.sceneListeners.add(fn)
+    return () => {
+      this.sceneListeners.delete(fn)
+    }
+  }
+
   private patch(update: Partial<BoardStatus>) {
     this.status = { ...this.status, ...update }
     this.listeners.forEach((l) => l())
@@ -189,7 +216,15 @@ export class BoardController {
     )
     const live = elements.filter((e) => !e.isDeleted)
     let sig = ""
-    for (const e of elements) if (!isTutor(e)) sig += `${e.id}:${e.version};`
+    let version = elements.length
+    for (const e of elements) {
+      version += e.version
+      if (!isTutor(e)) sig += `${e.id}:${e.version};`
+    }
+    if (version !== this.sceneVersion) {
+      this.sceneVersion = version
+      this.sceneListeners.forEach((l) => l())
+    }
 
     const updates: Partial<BoardStatus> = {}
     if (selection.join() !== this.status.selection.join()) updates.selection = selection
@@ -359,11 +394,19 @@ export class BoardController {
   private placeOrigin(size: { w: number; h: number }, opts: { near?: string; placement?: "below" | "right" }): Pt {
     const anchor = opts.near ? this.byId(opts.near) : undefined
     if (anchor) {
-      const b = this.box(anchor)
-      return { x: b.x + b.w + 80, y: b.y }
+      // Beside the whole panel the anchor belongs to, so the new panel can't land on top of its neighbours.
+      const step = this.status.steps.find((s) => s.elementIds.includes(anchor.id))
+      const panel = step ? this.live().filter((e) => step.elementIds.includes(e.id)) : []
+      const b = union((panel.length ? panel : [anchor]).map((e) => this.box(e)))!
+      return { x: b.x + b.w + 80, y: this.box(anchor).y }
     }
-    const all = union(this.live().map((e) => this.box(e)))
+    // The route map sits off to the side: lay new panels out next to the lesson, not under the map.
+    const route = this.routeIds()
+    const live = this.live()
+    const all = union(live.filter((e) => !route.has(e.id)).map((e) => this.box(e)))
     if (!all) {
+      const map = union(live.filter((e) => route.has(e.id)).map((e) => this.box(e)))
+      if (map) return { x: map.x + map.w + 160, y: map.y }
       const v = this.viewport()
       return {
         x: v.x + Math.max(40, (v.w - size.w) / 2),
@@ -383,7 +426,13 @@ export class BoardController {
   /** Convert draw shapes (panel coords) to Excalidraw elements, placed and connected. */
   private build(
     shapes: DrawShape[],
-    opts: { near?: string; placement?: "below" | "right"; step: string },
+    opts: {
+      near?: string
+      placement?: "below" | "right"
+      step: string
+      /** Extra customData per shape (the route map tags its nodes). */
+      tag?: (s: DrawShape) => Record<string, unknown> | undefined
+    },
     warnings: string[]
   ) {
     // Normalise local coordinates so the panel's top-left is (0,0).
@@ -418,7 +467,7 @@ export class BoardController {
       strokeWidth: 2,
       roughness: 1,
       strokeStyle: s.dashed ? ("dashed" as const) : ("solid" as const),
-      customData: custom,
+      customData: opts.tag ? { ...custom, ...opts.tag(s) } : custom,
     })
 
     // Pass 1: shapes and text (so arrows can measure what they connect).
@@ -782,9 +831,11 @@ export class BoardController {
     return this.enqueue("Erasing", async () => {
       const scene = this.live()
       const ids = new Set((input.ids ?? []).map((i) => this.aliases.get(i) ?? i))
+      const route = this.routeIds()
       const targets = scene.filter((e) => {
-        if (!isTutor(e)) return false
-        if (input.all) return true
+        if (!isTutor(e) && !route.has(e.id)) return false
+        // "Erase all" clears the tutor's drawings, not the route map.
+        if (input.all) return !route.has(e.id)
         return ids.has(e.id) || ((e as ExcalidrawTextElement).containerId && ids.has((e as ExcalidrawTextElement).containerId!))
       })
       if (!targets.length) return { ok: false, error: "Nothing of yours matched those ids." }
@@ -905,6 +956,220 @@ export class BoardController {
     this.upsert(this.live().map((e) => newElementWith(e, { isDeleted: true })), CaptureUpdateAction.IMMEDIATELY)
     this.aliases.clear()
     this.patch({ steps: [], yourTurn: null, studentDirty: false })
+    this.resetCamera()
+  }
+
+  /** Back to 100% at the origin (a fresh board shouldn't inherit the last lesson's zoom). */
+  private resetCamera() {
+    this.api.updateScene({
+      appState: { scrollX: 0, scrollY: 0, zoom: { value: 1 as never } },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    })
+  }
+
+  // ---------------------------------------------------------- route map
+
+  /** Ids of the route map's elements, including the labels inside its boxes. */
+  private routeIds() {
+    const live = this.live()
+    const ids = new Set(live.filter((e) => e.customData?.route).map((e) => e.id))
+    for (const e of live) {
+      const container = e.type === "text" ? (e as ExcalidrawTextElement).containerId : null
+      if (container && ids.has(container)) ids.add(e.id)
+    }
+    return ids
+  }
+
+  /**
+   * Show the learning route on the board: drawn (animated) the first time or
+   * when its steps change; otherwise only recoloured as the student progresses.
+   */
+  renderPlan(plan: LessonPlan | null): Promise<unknown> {
+    if (!plan) return Promise.resolve()
+    const sig = routeSignature(plan)
+    const existing = this.live().filter((e) => e.customData?.route)
+    if (existing.length && existing.every((e) => e.customData?.route === sig)) {
+      this.recolorRoute(plan)
+      return Promise.resolve()
+    }
+    return this.enqueue(existing.length ? "Updating the route" : "Mapping the route", async () => {
+      // An earlier queued call may have drawn this very route already.
+      const now = this.live().filter((e) => e.customData?.route)
+      if (now.length && now.every((e) => e.customData?.route === sig)) {
+        this.recolorRoute(plan)
+        return
+      }
+      const route = this.routeIds()
+      const old = union(this.live().filter((e) => route.has(e.id)).map((e) => this.box(e)))
+      if (route.size) {
+        this.upsert(
+          this.live()
+            .filter((e) => route.has(e.id))
+            .map((e) => newElementWith(e, { isDeleted: true }))
+        )
+      }
+      const { shapes, width } = this.routeShapes(plan)
+      // Same place as before; else to the left of the lesson; else top-left of the view.
+      const content = union(this.live().map((e) => this.box(e)))
+      const v = this.viewport()
+      const origin = old
+        ? { x: old.x, y: old.y }
+        : content
+          ? { x: content.x - width - 180, y: content.y }
+          : { x: v.x + 40, y: v.y + 60 }
+      const nodes = new Set(plan.nodes.map((n) => n.id))
+      const saved = this.placeOrigin
+      this.placeOrigin = () => origin
+      let built: ReturnType<BoardController["build"]>
+      try {
+        built = this.build(
+          shapes,
+          {
+            step: "route",
+            tag: (s) => {
+              const node = s.id?.startsWith("route-node-") ? s.id.slice("route-node-".length) : null
+              return { route: sig, ...(node && nodes.has(node) ? { routeNode: node } : {}) }
+            },
+          },
+          []
+        )
+      } finally {
+        this.placeOrigin = saved
+      }
+      await this.animate(built.groups, [])
+      this.recolorRoute(plan)
+      // Show the whole map once it's drawn, zooming out only if it doesn't fit.
+      const map = union(built.all.map((e) => this.box(e)))
+      if (map && !contains(this.viewport(), pad(map, 20)) && !this.pointerDown) {
+        this.api.scrollToContent(built.all as El[], { fitToViewport: true, viewportZoomFactor: 0.85, animate: true, duration: 450 })
+      }
+      this.addStep({ id: "route", title: `Route: ${plan.goal}`, kind: "draw", elementIds: built.all.map((e) => e.id) })
+    })
+  }
+
+  /**
+   * Columns by dependency depth, prerequisites on the left; long routes wrap
+   * into rows of a few columns so the map stays readable without zooming out.
+   */
+  private routeShapes(plan: LessonPlan) {
+    const W = 180
+    const H = 72
+    const GX = 64
+    const GY = 22
+    const ROW_GAP = 70
+    const layers = planLayers(plan)
+    const perRow = layers.length > 5 ? 4 : layers.length
+    const rows: string[][][] = []
+    for (let i = 0; i < layers.length; i += perRow) rows.push(layers.slice(i, i + perRow))
+    const colH = (n: number) => n * H + (n - 1) * GY
+    const width = Math.max(420, perRow * W + (perRow - 1) * GX)
+    const title = `Route: ${plan.goal}`
+    const titleLines = wrapText(title, Math.max(12, Math.floor(width / (FONT_SIZE.l * 0.55)))).split("\n").length
+    const byId = new Map(plan.nodes.map((n) => [n.id, n]))
+    const shapes: DrawShape[] = [{ kind: "text", id: "route-title", x: 0, y: 0, text: title, size: "l", w: width }]
+    let top = titleLines * FONT_SIZE.l * 1.4 + 28
+    for (const row of rows) {
+      const rowH = Math.max(...row.map((l) => colH(l.length)))
+      row.forEach((col, ci) => {
+        const y0 = top + (rowH - colH(col.length)) / 2
+        col.forEach((id, ri) => {
+          shapes.push({
+            kind: "rect",
+            id: `route-node-${id}`,
+            x: ci * (W + GX),
+            y: y0 + ri * (H + GY),
+            w: W,
+            h: H,
+            text: byId.get(id)!.title,
+            color: "gray",
+          })
+        })
+      })
+      top += rowH + ROW_GAP
+    }
+    for (const n of plan.nodes) {
+      for (const need of n.needs) {
+        shapes.push({ kind: "arrow", id: `route-edge-${need}-${n.id}`, from: `route-node-${need}`, to: `route-node-${n.id}`, color: "gray" })
+      }
+    }
+    shapes.push({
+      kind: "text",
+      id: "route-legend",
+      x: 0,
+      y: top - ROW_GAP + 28,
+      text: "green = understood · orange = now · gray = still to come",
+      size: "s",
+      color: "gray",
+      w: width,
+    })
+    return { shapes, width }
+  }
+
+  private recolorRoute(plan: LessonPlan) {
+    const live = this.live()
+    const status = new Map(plan.nodes.map((n) => [n.id, n.status]))
+    const updates: El[] = []
+    for (const el of live) {
+      const node = el.customData?.routeNode as string | undefined
+      if (!node || !status.has(node)) continue
+      const style = ROUTE_STYLE[status.get(node)!]
+      if (el.strokeColor !== style.stroke || el.backgroundColor !== style.fill || el.strokeWidth !== style.width) {
+        updates.push(newElementWith(el, { strokeColor: style.stroke, backgroundColor: style.fill, strokeWidth: style.width }))
+      }
+      const label = live.find((t) => t.type === "text" && (t as ExcalidrawTextElement).containerId === el.id)
+      if (label && label.strokeColor !== style.stroke) updates.push(newElementWith(label, { strokeColor: style.stroke }))
+    }
+    if (updates.length) this.upsert(updates, CaptureUpdateAction.NEVER)
+  }
+
+  /** Point the camera at the route map. */
+  focusRoute() {
+    const route = this.routeIds()
+    const els = this.live().filter((e) => route.has(e.id))
+    if (els.length)
+      this.api.scrollToContent(els as El[], { fitToViewport: true, viewportZoomFactor: 0.7, animate: true, duration: 450 })
+  }
+
+  // ------------------------------------------------------- save / load
+
+  /** The board as plain JSON, to save with the lesson. */
+  exportState(): BoardSnapshot {
+    const elements = this.live()
+    const used = new Set(elements.map((e) => (e as { fileId?: string }).fileId).filter(Boolean))
+    const files = Object.fromEntries(Object.entries(this.api.getFiles()).filter(([id]) => used.has(id)))
+    return {
+      elements: elements as unknown as unknown[],
+      files,
+      steps: this.status.steps,
+      aliases: [...this.aliases],
+      yourTurn: this.status.yourTurn,
+    }
+  }
+
+  /** Replace the board with a saved one (or an empty board). Undo history starts fresh. */
+  loadState(snap: BoardSnapshot | null) {
+    this.cancel()
+    const elements = snap?.elements?.length
+      ? restoreElements(snap.elements as Parameters<typeof restoreElements>[0], null, { repairBindings: true })
+      : []
+    const files = Object.values(snap?.files ?? {}) as BinaryFileData[]
+    if (files.length) this.api.addFiles(files)
+    this.api.updateScene({ elements, captureUpdate: CaptureUpdateAction.NEVER })
+    this.api.history.clear()
+    this.resetCamera()
+    this.aliases = new Map(snap?.aliases ?? [])
+    this.usedIds.clear()
+    this.studentSignature = ""
+    this.patch({
+      steps: snap?.steps ?? [],
+      yourTurn: snap?.yourTurn ?? null,
+      studentDirty: false,
+      selection: [],
+      isEmpty: elements.length === 0,
+    })
+    if (elements.length) {
+      requestAnimationFrame(() => this.api.scrollToContent(undefined, { fitToViewport: true, viewportZoomFactor: 0.9 }))
+    }
   }
 
   // ----------------------------------------------------- model's view
@@ -921,7 +1186,11 @@ export class BoardController {
       const t = e as ExcalidrawTextElement
       if (e.type === "text" && t.containerId) labels.set(t.containerId, t.text)
     }
-    const shown = scene.filter((e) => !(e.type === "text" && (e as ExcalidrawTextElement).containerId))
+    const route = this.routeIds()
+    const routeNodes = scene.filter((e) => route.has(e.id) && e.customData?.routeNode)
+    const shown = scene.filter(
+      (e) => !route.has(e.id) && !(e.type === "text" && (e as ExcalidrawTextElement).containerId)
+    )
     const recent = shown.slice(-140)
     const lines = recent.map((e) => {
       const b = this.box(e)
@@ -943,6 +1212,14 @@ export class BoardController {
       `Elements (${shown.length}${shown.length > recent.length ? `, newest ${recent.length} shown` : ""}) — author | id | type | x,y,wxh | text:`,
       ...lines,
     ]
+    if (routeNodes.length) {
+      const b = union(scene.filter((e) => route.has(e.id)).map((e) => this.box(e)))!
+      out.push(
+        `ROUTE MAP at ${r(b.x)},${r(b.y)},${r(b.w)}x${r(b.h)} (kept up to date for you) — step → element id: ${routeNodes
+          .map((e) => `${e.customData!.routeNode} → ${e.id}`)
+          .join(", ")}`
+      )
+    }
     if (this.status.selection.length) {
       out.push(`STUDENT SELECTED: ${this.status.selection.join(", ")} — their message is about these.`)
     }

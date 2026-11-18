@@ -130,7 +130,8 @@ export function MessageView({
       )
     }
     const shown = text.replace(/^\[(check|watching)\]\s*/i, "")
-    const snapshot = message.parts.some((p) => p.type === "file" && p.filename === BOARD_SNAPSHOT_NAME)
+    const snapshot =
+      message.metadata?.sharedBoard || message.parts.some((p) => p.type === "file" && p.filename === BOARD_SNAPSHOT_NAME)
     return (
       <Message align="end">
         <MessageContent className="items-end gap-1.5">

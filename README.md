@@ -18,7 +18,10 @@ it watch you draw and nudge you along.
 | **Exact maths** | math.js engine for arithmetic, units, simplification, derivatives and roots. |
 | **Your material** | Attach photos of homework, screenshots, PDFs, notes and code — or a whole course folder. Images go straight to the model; documents are indexed in your **library**. The tutor works it agentically — `library_search` to find, `library_outline` to navigate a long PDF, `library_read` for exact text, and `library_view_page` to **screenshot a page and look at it** (figures, equations, tables, scans) — and cites it (`[L1]`, file + page). |
 | **Settings** | Pick the model from the composer (or ⌘, for everything): switch provider, browse the live OpenRouter catalog with tool/vision/reasoning badges and prices, set separate tutor, vision and research models, choose thinking effort (off → max), sampling (temperature, top-p/k, min-p, penalties, max tokens, seed — greyed out when the model doesn't accept them), agent step limits, web access on/off and OpenRouter routing. Saved per browser; API keys never leave the server. |
-| **Teaching modes** | *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
+| **Learn mode** | Name a goal and Sketch first **measures** where your understanding ends (2–4 probe questions), then **maps a route** — a dependency map from what you know to the goal, drawn on the board and lit up as you go (green = understood, orange = now) — and **teaches it one step at a time**: predict, see it, check. Confident-but-wrong answers are treated as misconceptions and repaired before moving on; the route is redrawn when your answers surprise it. |
+| **Question cards** | Multiple choice (shuffled) or recall in your own words, with how sure you are, an optional *think out loud* box and *I don't know yet*. The tutor reads your reasoning, not just right/wrong. |
+| **Saved lessons** | Every lesson — conversation, board and route — is saved as you go and comes back on reload. The history (top left, or ⌘K) lists them by date with route progress; open, rename, delete or start a new one. Stored as plain JSON in `.data/lessons/`. |
+| **Teaching modes** | *Learn* (measure → route → teach), *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
 
 ## How it works
 
@@ -99,7 +102,7 @@ the agent loop, web search, images, maths and the board are all real. Click the 
 
 ## Keyboard
 
-`⌘K` command palette · `/` focus the message box · `Esc` stop the tutor · `Enter` send ·
+`⌘K` command palette (also: recent lessons, show the route) · `/` focus the message box · `Esc` stop the tutor · `Enter` send ·
 `Shift+Enter` new line · `⌘,` settings. All Excalidraw shortcuts work on the board.
 
 ## Project layout
@@ -108,6 +111,10 @@ the agent loop, web search, images, maths and the board are all real. Click the 
 src/app/api/chat/route.ts      two-stage pipeline (perception → agent), streamed to useChat
 src/app/api/image/route.ts     Wikimedia image proxy (for pinning images onto the canvas)
 src/app/api/models/route.ts    provider model catalogs (capabilities, parameters, prices)
+src/app/api/lessons/           saved lessons: list, load, save, rename, delete
+src/lib/agent/plan*.ts         the learning route: schema, validation, plan_lesson / plan_update tools
+src/lib/lessons/               lesson store (.data/lessons) and the browser hook
+src/components/lessons/        lesson history sheet
 src/lib/agent/settings.ts      settings schema + defaults shared by browser and server
 src/components/settings/       settings dialog, model picker, composer model/effort controls
 src/lib/agent/                 agent, prompts, models, tool schemas, server tools, mock model

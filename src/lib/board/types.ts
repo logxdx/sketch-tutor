@@ -29,6 +29,17 @@ export type LessonStep = {
 
 export type YourTurn = { frameId: string; task: string }
 
+/** Everything needed to put a board back exactly as it was (saved with a lesson). */
+export type BoardSnapshot = {
+  /** Excalidraw elements (plain JSON). */
+  elements: unknown[]
+  /** Images on the board, by file id (data URLs). */
+  files: Record<string, unknown>
+  steps: LessonStep[]
+  aliases: [string, string][]
+  yourTurn: YourTurn | null
+}
+
 export type BoardStatus = {
   ready: boolean
   /** What the tutor is doing on the board right now, if anything. */

@@ -49,7 +49,7 @@ export const clientTools = {
   }),
   quiz: tool({
     description:
-      "Ask an interactive multiple-choice question in the chat. The student clicks an answer; the result (and whether it was correct) comes back to you. Use for quick checks of understanding.",
+      "Ask a question card in the chat: multiple choice (options shown shuffled) or recall (they write the answer; commit your model answer first). The student also rates their confidence and can think out loud, or say they don't know yet — all of that comes back to you. Several quiz calls in one step appear together and you continue when all are answered. Use purpose=probe to measure what they know before teaching, check to test what you just taught.",
     inputSchema: quizInput,
   }),
 }
