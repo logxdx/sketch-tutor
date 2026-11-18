@@ -46,7 +46,9 @@ useChat ── board state + snapshot ──────┼──────►
 - **Context library:** `POST /api/library` extracts text, chunks it and keeps a BM25 index per browser
   library (`.data/library/`, git-ignored). PDFs go through [LiteParse](https://github.com/run-llama/liteparse)
   (`@llamaindex/liteparse`, Rust + PDFium Node bindings): per-page Markdown rebuilt from the layout,
-  with local Tesseract OCR for scanned pages — no cloud calls. The original PDF is kept so
+  with OCR for scanned pages by Tesseract 5.3.4 compiled into LiteParse. OCR runs locally — document
+  contents never leave the machine — but the first OCR in a language downloads that language's
+  `tessdata_best` model from GitHub once (cached in `~/.tesseract-rs/tessdata/`). The original PDF is kept so
   `GET /api/library/page` can render any page (cached PNG) for `library_view_page`, the chat, and the
   board. Small files attached to a message are put in the prompt in full. Folders are walked in the
   browser (skipping `node_modules`, `.git`, binaries) and uploaded in batches.
