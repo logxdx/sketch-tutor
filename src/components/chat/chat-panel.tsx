@@ -1,16 +1,17 @@
 "use client"
 
 import {
-  ArrowUpIcon,
   BoxIcon,
   CheckCheckIcon,
+  FileUpIcon,
   GlobeIcon,
   HandIcon,
   LineChartIcon,
+  Loader2Icon,
   MousePointerClickIcon,
   PenLineIcon,
   RotateCcwIcon,
-  SquareIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 import * as React from "react"
 import { useShortcut } from "@ui-sdk/react/shortcuts"
@@ -23,9 +24,24 @@ import {
 } from "@ui-sdk/react/timeline"
 
 import { Segmented } from "@/components/ui-sdk/controls"
+import { Button } from "@/components/ui/button"
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller"
 import type { TutorUIMessage } from "@/lib/agent/types"
 import type { BoardStatus } from "@/lib/board/types"
+import { fromDataTransfer } from "@/lib/context/client"
+import type { LibraryApi } from "@/lib/context/use-library"
 import { cn } from "@/lib/utils"
+import { Composer } from "./composer"
+import { FilePickers, type FilePickersHandle } from "./file-pickers"
+import { LibraryPanel } from "./library-panel"
 import { MessageView } from "./message"
 import { useTutor } from "./tutor-context"
 
@@ -35,21 +51,20 @@ const STARTERS = [
   { icon: <LineChartIcon />, text: "Why does compound interest grow so fast? Let me play with it." },
   { icon: <GlobeIcon />, text: "What caused the fall of the Roman Empire? Use sources and a timeline." },
   { icon: <HandIcon />, text: "Quiz me on solving quadratic equations — I'll write on the board." },
-  { icon: <MousePointerClickIcon />, text: "Explain binary search step by step on the board." },
 ]
 
-function EmptyState() {
+function EmptyState({ onAddContext }: { onAddContext: () => void }) {
   const { send } = useTutor()
   return (
-    <div className="flex h-full flex-col justify-center gap-6 px-2 py-8">
+    <div className="flex min-h-full flex-col justify-center gap-6 px-2 py-8">
       <div className="space-y-2">
         <div className="inline-flex size-10 items-center justify-center rounded-2xl bg-tutor font-[cursive] text-xl font-bold text-white shadow">
           S
         </div>
         <h2 className="text-xl font-semibold tracking-tight text-balance">Ask anything. I&apos;ll think it through on the board with you.</h2>
         <p className="text-sm text-pretty text-muted-foreground">
-          I draw live while I explain, build 3D models, graphs and charts, find real sources and images — and I watch
-          what <em>you</em> draw too. Select something on the board and ask about it.
+          I draw live while I explain, build 3D models, graphs and charts, find real sources — and I learn from{" "}
+          <em>your</em> material: photos of homework, PDFs, lecture notes or a whole course folder.
         </p>
       </div>
       <div className="grid gap-2">
@@ -64,6 +79,14 @@ function EmptyState() {
             {s.text}
           </button>
         ))}
+        <button
+          type="button"
+          onClick={onAddContext}
+          className="flex items-center gap-3 rounded-xl border border-dashed px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0"
+        >
+          <FileUpIcon />
+          Start from your own material — a photo, a PDF, or a folder
+        </button>
       </div>
     </div>
   )
@@ -104,12 +127,15 @@ function Outline({ board }: { board: BoardStatus }) {
   )
 }
 
+type View = "lesson" | "outline" | "library"
+
 export function ChatPanel({
   messages,
   status,
   statusLabel,
   error,
   board,
+  library,
   onStop,
   onRetry,
 }: {
@@ -118,36 +144,55 @@ export function ChatPanel({
   statusLabel: string | null
   error: Error | undefined
   board: BoardStatus
+  library: LibraryApi
   onStop: () => void
   onRetry: () => void
 }) {
   const { send } = useTutor()
-  const [view, setView] = React.useState<"lesson" | "outline">("lesson")
-  const [input, setInput] = React.useState("")
-  const scrollRef = React.useRef<HTMLDivElement>(null)
-  const stick = React.useRef(true)
+  const [view, setView] = React.useState<View>("lesson")
+  const [dragging, setDragging] = React.useState(false)
   const inputRef = React.useRef<HTMLTextAreaElement>(null)
+  const pickers = React.useRef<FilePickersHandle>(null)
+  const dragDepth = React.useRef(0)
   const busy = status === "submitted" || status === "streaming"
-
-  React.useEffect(() => {
-    const el = scrollRef.current
-    if (el && stick.current) el.scrollTo({ top: el.scrollHeight })
-  }, [messages, statusLabel, board.activity])
-
-  const submit = () => {
-    const text = input.trim()
-    if (!text || busy) return
-    send(text)
-    setInput("")
-    stick.current = true
-  }
 
   useShortcut("/", () => inputRef.current?.focus(), { description: "Focus the message box" })
 
   const statusText = board.activity ?? (busy ? (statusLabel ?? "Thinking…") : null)
 
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    dragDepth.current = 0
+    setDragging(false)
+    const { files, folders } = await fromDataTransfer(e.dataTransfer)
+    if (folders.length) {
+      for (const folder of folders) library.addFolder(folder, files.filter((f) => f.path.startsWith(`${folder}/`)))
+      const loose = files.filter((f) => !folders.some((d) => f.path.startsWith(`${d}/`)))
+      if (loose.length) library.addFiles(loose.map((f) => f.file))
+    } else if (files.length) {
+      library.addFiles(files.map((f) => f.file))
+    }
+    if (view === "outline") setView("lesson")
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div
+      className="relative flex h-full min-h-0 flex-col bg-background"
+      onDragEnter={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return
+        dragDepth.current++
+        setDragging(true)
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (!dragDepth.current) setDragging(false)
+      }}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault()
+      }}
+      onDrop={onDrop}
+    >
+      <FilePickers library={library} ref={pickers} />
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3">
         <Segmented
           label="Panel view"
@@ -157,6 +202,7 @@ export function ChatPanel({
           items={[
             { value: "lesson", label: "Lesson" },
             { value: "outline", label: `Outline${board.steps.length ? ` · ${board.steps.length}` : ""}` },
+            { value: "library", label: `Library${library.docs.length ? ` · ${library.docs.length}` : ""}` },
           ]}
         />
         {board.yourTurn ? (
@@ -166,48 +212,59 @@ export function ChatPanel({
         ) : null}
       </div>
 
-      <div
-        ref={scrollRef}
-        onScroll={(e) => {
-          const el = e.currentTarget
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-        }}
-        className="min-h-0 flex-1 overflow-y-auto"
-      >
+      <div className="min-h-0 flex-1">
         {view === "outline" ? (
-          <Outline board={board} />
+          <div className="h-full overflow-y-auto">
+            <Outline board={board} />
+          </div>
+        ) : view === "library" ? (
+          <LibraryPanel
+            library={library}
+            onPickFiles={() => pickers.current?.files()}
+            onPickFolder={() => pickers.current?.folder()}
+          />
         ) : messages.length === 0 ? (
-          <div className="mx-auto h-full max-w-xl px-4">
-            <EmptyState />
+          <div className="mx-auto h-full max-w-xl overflow-y-auto px-4">
+            <EmptyState onAddContext={() => pickers.current?.files()} />
           </div>
         ) : (
-          <div className="mx-auto max-w-2xl space-y-5 px-4 py-5">
-            {messages.map((m, i) => (
-              <MessageView key={m.id} message={m} isLast={i === messages.length - 1} streaming={busy} />
-            ))}
-            {statusText ? (
-              <div className="flex items-center gap-2 pl-9 text-xs text-muted-foreground" aria-live="polite">
-                <span className="relative flex size-2">
-                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-tutor opacity-60" />
-                  <span className="relative inline-flex size-2 rounded-full bg-tutor" />
-                </span>
-                {statusText}
-              </div>
-            ) : null}
-            {error ? (
-              <div className="ml-9 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
-                <p className="font-medium text-destructive">Something went wrong</p>
-                <p className="mt-1 line-clamp-4 text-xs text-muted-foreground">{error.message}</p>
-                <button
-                  type="button"
-                  onClick={onRetry}
-                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                >
-                  <RotateCcwIcon className="size-3" aria-hidden /> Try again
-                </button>
-              </div>
-            ) : null}
-          </div>
+          <MessageScrollerProvider autoScroll>
+            <MessageScroller>
+              <MessageScrollerViewport>
+                <MessageScrollerContent className="mx-auto max-w-2xl px-4 py-5" aria-busy={status === "streaming"}>
+                  {messages.map((m, i) => (
+                    <MessageScrollerItem key={m.id} messageId={m.id} scrollAnchor={m.role === "user"}>
+                      <MessageView message={m} isLast={i === messages.length - 1} busy={busy} />
+                    </MessageScrollerItem>
+                  ))}
+                  {statusText ? (
+                    <MessageScrollerItem messageId="status">
+                      <Marker aria-live="polite" className="pl-10">
+                        <MarkerIcon>
+                          <Loader2Icon className="animate-spin text-tutor" />
+                        </MarkerIcon>
+                        <MarkerContent className="shimmer">{statusText}</MarkerContent>
+                      </Marker>
+                    </MessageScrollerItem>
+                  ) : null}
+                  {error ? (
+                    <MessageScrollerItem messageId="error">
+                      <Marker className="pl-10 text-destructive">
+                        <MarkerIcon>
+                          <TriangleAlertIcon />
+                        </MarkerIcon>
+                        <MarkerContent className="line-clamp-3">{error.message}</MarkerContent>
+                        <Button variant="ghost" size="xs" onClick={onRetry} className="ml-auto shrink-0">
+                          <RotateCcwIcon /> Retry
+                        </Button>
+                      </Marker>
+                    </MessageScrollerItem>
+                  ) : null}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton />
+            </MessageScroller>
+          </MessageScrollerProvider>
         )}
       </div>
 
@@ -221,61 +278,47 @@ export function ChatPanel({
               </span>
             ) : null}
             {board.yourTurn ? (
-              <button
-                type="button"
+              <Button
+                size="xs"
+                className="rounded-full"
                 disabled={busy}
                 onClick={() => send("[check] I'm done — please check my work on the board.", "check")}
-                className="inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-[11px] font-medium text-primary-foreground disabled:opacity-50"
               >
-                <CheckCheckIcon className="size-3" aria-hidden /> Check my work
-              </button>
+                <CheckCheckIcon /> Check my work
+              </Button>
             ) : null}
           </div>
         ) : null}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            submit()
+        <Composer
+          library={library}
+          busy={busy}
+          inputRef={inputRef}
+          pickers={pickers}
+          placeholder={
+            board.yourTurn ? "Tell Sketch what you did, or ask for a hint…" : "Ask anything — or draw, attach, and ask about it"
+          }
+          onSubmit={(text) => {
+            const extras = library.takeDrafts()
+            const fallback = extras.attachments.length || extras.files.length ? "Here's my material — help me with it." : ""
+            send(text || fallback, "chat", extras)
+            setView("lesson")
           }}
-          className="flex items-end gap-2 rounded-2xl border bg-card p-1.5 shadow-xs focus-within:ring-2 focus-within:ring-ring/40"
-        >
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                submit()
-              }
-            }}
-            rows={1}
-            placeholder={board.yourTurn ? "Tell Sketch what you did, or ask for a hint…" : "Ask anything — or draw and ask about it"}
-            aria-label="Message Sketch"
-            className="field-sizing-content max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
-          />
-          {busy ? (
-            <button
-              type="button"
-              onClick={onStop}
-              aria-label="Stop"
-              className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-foreground text-background"
-            >
-              <SquareIcon className="size-3.5 fill-current" aria-hidden />
-            </button>
-          ) : (
-            <button
-              type="submit"
-              aria-label="Send"
-              disabled={!input.trim()}
-              className={cn(
-                "inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
-              )}
-            >
-              <ArrowUpIcon className="size-4" aria-hidden />
-            </button>
-          )}
-        </form>
+          onStop={onStop}
+          onOpenLibrary={() => setView("library")}
+        />
+      </div>
+
+      {/* Drop zone for files and whole folders. */}
+      <div
+        aria-hidden={!dragging}
+        className={cn(
+          "pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary bg-background/90 text-sm backdrop-blur transition-opacity",
+          dragging ? "opacity-100" : "opacity-0"
+        )}
+      >
+        <FileUpIcon className="size-6 text-primary" />
+        <span className="font-medium">Drop files or folders</span>
+        <span className="text-xs text-muted-foreground">Images go with your message · PDFs, notes and code go to your library</span>
       </div>
     </div>
   )

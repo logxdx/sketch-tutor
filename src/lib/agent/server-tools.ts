@@ -158,7 +158,7 @@ export async function calculate(input: {
 
 // ---------------------------------------------------------------- tools
 
-export function createServerTools(ctx: { snapshot: string | null }) {
+export function createServerTools(ctx: { snapshot: string | null; images: string[] }) {
   return {
     // Web tools ported from the pi agent setup (see ./web).
     web_search: webSearchTool,
@@ -198,10 +198,14 @@ export function createServerTools(ctx: { snapshot: string | null }) {
 
     look_closer: tool({
       description:
-        "Ask the vision model a specific question about the latest picture of the whiteboard (e.g. 'What did the student write in the your-turn frame?', 'Is the arrow in their diagram pointing left or right?').",
-      inputSchema: z.object({ question: z.string() }),
-      execute: async ({ question }, { abortSignal }) => {
-        if (!ctx.snapshot) return { answer: "No board picture is available for this turn." }
+        "Ask the vision model a specific question about the latest picture of the whiteboard, or about an image the student attached (image: 1 = their first attached image). E.g. 'What did the student write in the your-turn frame?', 'What does the graph in their photo show at x = 2?'.",
+      inputSchema: z.object({
+        question: z.string(),
+        image: z.number().int().min(1).optional().describe("Attached image number; omit for the whiteboard."),
+      }),
+      execute: async ({ question, image }, { abortSignal }) => {
+        const url = image ? ctx.images[image - 1] : ctx.snapshot
+        if (!url) return { answer: image ? `There is no attached image #${image}.` : "No board picture is available for this turn." }
         const { text } = await generateText({
           model: getModel("vision"),
           abortSignal,
@@ -209,8 +213,11 @@ export function createServerTools(ctx: { snapshot: string | null }) {
             {
               role: "user",
               content: [
-                { type: "file", data: new URL(ctx.snapshot), mediaType: "image/jpeg" },
-                { type: "text", text: `This is a shared whiteboard between a tutor and a student. ${question}\nAnswer precisely and briefly; transcribe handwriting exactly.` },
+                { type: "file", data: new URL(url), mediaType: url.slice(5, url.indexOf(";")) || "image/jpeg" },
+                {
+                  type: "text",
+                  text: `${image ? "This is an image the student shared with their tutor." : "This is a shared whiteboard between a tutor and a student."} ${question}\nAnswer precisely and briefly; transcribe handwriting exactly.`,
+                },
               ],
             },
           ],

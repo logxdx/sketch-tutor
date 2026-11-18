@@ -1,121 +1,204 @@
 "use client"
 
-import { BrainIcon, ChevronDownIcon, EyeIcon, ImageIcon } from "lucide-react"
+import { EyeIcon, FileCodeIcon, FileTextIcon, FolderIcon, ImageIcon, SheetIcon } from "lucide-react"
 import { math } from "@streamdown/math"
 import { mermaid } from "@streamdown/mermaid"
-import * as React from "react"
 import { Streamdown } from "streamdown"
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@ui-sdk/react/collapsible"
 
-import type { TutorUIMessage } from "@/lib/agent/types"
-import { cn } from "@/lib/utils"
-import { ToolPartView } from "./tool-cards"
+import {
+  Attachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+  AttachmentTrigger,
+} from "@/components/ui/attachment"
+import { Bubble, BubbleContent } from "@/components/ui/bubble"
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
+import { Message, MessageAvatar, MessageContent } from "@/components/ui/message"
+import { BOARD_SNAPSHOT_NAME, type TutorUIMessage } from "@/lib/agent/types"
+import { formatBytes } from "@/lib/context/client"
+import type { DocKind, MessageAttachment } from "@/lib/context/types"
+import { SourcesFooter } from "./sources"
+import { MEDIA_TOOLS, MediaPartView } from "./tool-cards"
+import { ReasoningLine, STEP_TOOLS, StepLine, StepTrace, type ToolPart } from "./trace-steps"
 
 const plugins = { math, mermaid }
 
-function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
-  if (!text.trim()) return null
-  return (
-    <Collapsible>
-      <CollapsibleTrigger className="group inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
-        <BrainIcon className={cn("size-3.5", streaming && "animate-pulse")} aria-hidden />
-        {streaming ? "Thinking…" : "Thought it through"}
-        <ChevronDownIcon className="size-3 transition-transform group-data-open:rotate-180" aria-hidden />
-      </CollapsibleTrigger>
-      <CollapsiblePanel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 data-ending-style:h-0 data-starting-style:h-0">
-        <div className="mt-1.5 border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground">{text}</div>
-      </CollapsiblePanel>
-    </Collapsible>
+type Part = TutorUIMessage["parts"][number]
+
+export const docIcon = (kind: DocKind) =>
+  kind === "code" ? <FileCodeIcon /> : kind === "data" ? <SheetIcon /> : <FileTextIcon />
+
+/** Attachment cards for what the student sent with a message. */
+function SentAttachments({ message }: { message: TutorUIMessage }) {
+  const images = message.parts.filter(
+    (p): p is Extract<Part, { type: "file" }> => p.type === "file" && p.filename !== BOARD_SNAPSHOT_NAME
   )
+  const files = message.metadata?.attachments ?? []
+  if (!images.length && !files.length) return null
+  return (
+    <AttachmentGroup className="justify-end">
+      {images.map((img, i) => (
+        <Attachment key={`img-${i}`} orientation="vertical" className="w-32">
+          <AttachmentTrigger
+            render={<a href={img.url} target="_blank" rel="noreferrer" />}
+            aria-label={`Open ${img.filename ?? "image"}`}
+          />
+          <AttachmentMedia variant="image">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={img.url} alt={img.filename ?? "attached image"} />
+          </AttachmentMedia>
+          <AttachmentContent>
+            <AttachmentTitle className="text-xs">{img.filename ?? "Image"}</AttachmentTitle>
+          </AttachmentContent>
+        </Attachment>
+      ))}
+      {files.map((f: MessageAttachment, i) =>
+        f.type === "folder" ? (
+          <Attachment key={`f-${i}`} size="sm">
+            <AttachmentMedia>
+              <FolderIcon />
+            </AttachmentMedia>
+            <AttachmentContent>
+              <AttachmentTitle>{f.name}</AttachmentTitle>
+              <AttachmentDescription>
+                {f.files} files{f.skipped ? ` · ${f.skipped} skipped` : ""}
+              </AttachmentDescription>
+            </AttachmentContent>
+          </Attachment>
+        ) : (
+          <Attachment key={`d-${i}`} size="sm">
+            <AttachmentMedia>{docIcon(f.kind)}</AttachmentMedia>
+            <AttachmentContent>
+              <AttachmentTitle>{f.name}</AttachmentTitle>
+              <AttachmentDescription>
+                {f.pages ? `${f.pages} pages · ` : ""}
+                {formatBytes(f.size)}
+              </AttachmentDescription>
+            </AttachmentContent>
+          </Attachment>
+        )
+      )}
+    </AttachmentGroup>
+  )
+}
+
+/** Split an assistant message into runs: Trace steps, text, and media cards (shadcn Trace grouping). */
+function groupRuns(parts: Part[]) {
+  type Run = { kind: "trace" | "text" | "media"; parts: Part[] }
+  const runs: Run[] = []
+  for (const part of parts) {
+    let kind: Run["kind"] | null = null
+    if (part.type === "reasoning") kind = "trace"
+    else if (part.type === "text") kind = part.text.trim() ? "text" : null
+    else if (part.type.startsWith("tool-")) {
+      const name = part.type.slice(5)
+      kind = STEP_TOOLS.has(name) ? "trace" : MEDIA_TOOLS.has(name) ? "media" : null
+    }
+    if (!kind) continue
+    const last = runs.at(-1)
+    if (last && last.kind === kind && kind !== "media") last.parts.push(part)
+    else runs.push({ kind, parts: [part] })
+  }
+  return runs
 }
 
 export function MessageView({
   message,
   isLast,
-  streaming,
+  busy,
 }: {
   message: TutorUIMessage
   isLast: boolean
-  streaming: boolean
+  busy: boolean
 }) {
   if (message.role === "user") {
     const text = message.parts
       .filter((p) => p.type === "text")
       .map((p) => p.text)
       .join("\n")
-    const snapshot = message.parts.find((p) => p.type === "file")
     const kind = message.metadata?.kind
     if (kind === "watch") {
       return (
-        <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
-          <EyeIcon className="size-3" aria-hidden /> Sketch glanced at your drawing
-        </div>
+        <Marker variant="separator">
+          <MarkerIcon>
+            <EyeIcon />
+          </MarkerIcon>
+          <MarkerContent>Sketch glanced at your drawing</MarkerContent>
+        </Marker>
       )
     }
     const shown = text.replace(/^\[(check|watching)\]\s*/i, "")
+    const snapshot = message.parts.some((p) => p.type === "file" && p.filename === BOARD_SNAPSHOT_NAME)
     return (
-      <div className="flex flex-col items-end gap-1">
-        <div className="max-w-[88%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-sm whitespace-pre-wrap text-primary-foreground">
-          {shown}
-        </div>
-        {snapshot && snapshot.type === "file" ? (
-          <a
-            href={snapshot.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-            title="The board as Sketch saw it"
-          >
-            <ImageIcon className="size-3" aria-hidden /> board snapshot shared
-          </a>
-        ) : null}
-      </div>
+      <Message align="end">
+        <MessageContent className="items-end gap-1.5">
+          <SentAttachments message={message} />
+          {shown.trim() && shown !== "(see attachments)" ? (
+            <Bubble align="end" variant="muted">
+              <BubbleContent className="whitespace-pre-wrap">{shown}</BubbleContent>
+            </Bubble>
+          ) : null}
+          {snapshot ? (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <ImageIcon className="size-3" aria-hidden /> shared the board
+            </span>
+          ) : null}
+        </MessageContent>
+      </Message>
     )
   }
 
-  const parts = message.parts
-  // Last suggest_replies part only, rendered at the very end.
-  const lastSuggest = parts.findLastIndex((p) => p.type === "tool-suggest_replies")
+  const live = busy && isLast
+  const runs = groupRuns(message.parts)
+  const lastPart = message.parts.at(-1)
 
   return (
-    <div className="flex gap-2.5">
-      <div
-        aria-hidden
-        className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-tutor font-[cursive] text-sm font-bold text-white shadow-sm"
-      >
-        S
-      </div>
-      <div className="min-w-0 flex-1 space-y-2">
-        {parts.map((part, i) => {
-          if (part.type === "text") {
-            if (!part.text.trim()) return null
+    <Message>
+      <MessageAvatar className="size-8 self-start bg-tutor font-[cursive] text-sm font-bold text-white">S</MessageAvatar>
+      <MessageContent className="min-w-0 gap-3">
+        {runs.map((run, r) => {
+          if (run.kind === "trace") {
             return (
-              <Streamdown
-                key={i}
-                plugins={plugins}
-                className="prose-chat text-sm leading-relaxed"
-                isAnimating={streaming && isLast && i === parts.length - 1}
-              >
-                {part.text}
-              </Streamdown>
+              <StepTrace key={r}>
+                <ReasoningLine
+                  text={run.parts
+                    .map((p) => (p.type === "reasoning" ? p.text.trim() : ""))
+                    .filter(Boolean)
+                    .join("\n\n")}
+                  streaming={live && lastPart?.type === "reasoning" && run.parts.includes(lastPart)}
+                />
+                {run.parts.map((p, i) =>
+                  p.type === "reasoning" ? null : <StepLine key={i} part={p as ToolPart} live={live} />
+                )}
+              </StepTrace>
             )
           }
-          if (part.type === "reasoning") {
-            return <Reasoning key={i} text={part.text} streaming={streaming && isLast && part.state === "streaming"} />
-          }
-          if (part.type.startsWith("tool-")) {
-            if (part.type === "tool-suggest_replies" && i !== lastSuggest) return null
-            return (
-              <ToolPartView
-                key={i}
-                part={part as Parameters<typeof ToolPartView>[0]["part"]}
-                isLast={isLast && !streaming}
-              />
+          if (run.kind === "text") {
+            return run.parts.map((p, i) =>
+              p.type === "text" ? (
+                <Streamdown
+                  key={`${r}-${i}`}
+                  plugins={plugins}
+                  className="prose-chat text-sm leading-relaxed"
+                  isAnimating={live && p === lastPart}
+                >
+                  {p.text}
+                </Streamdown>
+              ) : null
             )
           }
-          return null
+          const p = run.parts[0] as ToolPart
+          // Only the newest suggestions are clickable.
+          if (p.type === "tool-suggest_replies" && message.parts.findLastIndex((x) => x.type === "tool-suggest_replies") !== message.parts.indexOf(p)) {
+            return null
+          }
+          return <MediaPartView key={r} part={p} isLast={isLast && !busy} />
         })}
-      </div>
-    </div>
+        {!live ? <SourcesFooter message={message} /> : null}
+      </MessageContent>
+    </Message>
   )
 }

@@ -16,3 +16,6 @@ next-env.d.ts
 .vercel
 npm-debug.log*
 .DS_Store
+
+# student context library (local data)
+.data

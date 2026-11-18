@@ -16,6 +16,7 @@ it watch you draw and nudge you along.
 | **Graphs & data** | Hand-drawn function plots on the board; slider explorers for `y = f(x, params)`; bar/line/area/scatter charts with tooltips and a table view. |
 | **Sources & images** | Web search, page/PDF reading and a research sub-agent with numbered citations; openly licensed Wikimedia images you can pin onto the board. |
 | **Exact maths** | math.js engine for arithmetic, units, simplification, derivatives and roots. |
+| **Your material** | Attach photos of homework, screenshots, PDFs, notes and code — or a whole course folder. Images go straight to the model; documents are extracted (PDFs page by page), indexed in your **library**, and the tutor searches and cites them (`[L1]`, file + page) with `library_search` / `library_read`. |
 | **Teaching modes** | *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
 
 ## How it works
@@ -42,6 +43,13 @@ useChat ── board state + snapshot ──────┼──────►
   automatic fallback, and TinyFish → Readability/Turndown (HTML, PDF, Next.js RSC) → Jina fetch.
   Keys come from the same keyring entries (`secret-tool … service pi-web-search`), then env.
   A server-side SSRF guard blocks fetches to local/private addresses.
+- **Context library:** `POST /api/library` extracts text (PDF via `unpdf`, text/code/notebooks), chunks it
+  and keeps a BM25 index per browser library (`.data/library/<id>.json`, git-ignored). Small files
+  attached to a message are put in the prompt in full; everything is searchable by the agent.
+  Folders are walked in the browser (skipping `node_modules`, `.git`, binaries) and uploaded in batches.
+- **Agent UI:** shadcn's agent components — **Trace** (every reasoning step and tool call, following the
+  official Tool / Reasoning / Sources patterns), **Code Block**, **Message**, **Bubble**, **Attachment**,
+  **Marker**, **Message Scroller**, plus the Prompt Input, Suggestion and File Tree patterns.
 - **UI:** [shadcn/ui](https://ui.shadcn.com) for the theme and styled primitives, and
   [UI SDK](https://github.com/vercel-labs/ui) (`@ui-sdk/react`) for behaviours — resizable panels,
   command palette (⌘K), select, segmented control, switch, tooltips, toasts, timeline (lesson

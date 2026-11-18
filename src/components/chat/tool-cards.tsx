@@ -1,38 +1,24 @@
 "use client"
 
 import {
-  BoxIcon,
-  CalculatorIcon,
-  CheckCircle2Icon,
-  ChevronDownIcon,
-  CircleDotIcon,
-  EraserIcon,
-  EyeIcon,
-  FileTextIcon,
-  GlobeIcon,
-  HandIcon,
-  ImageIcon,
-  LineChartIcon,
-  Loader2Icon,
-  MousePointer2Icon,
-  PenLineIcon,
-  PinIcon,
-  SearchIcon,
-  SlidersHorizontalIcon,
-  SparklesIcon,
-  XCircleIcon,
   BarChart3Icon,
+  BoxIcon,
+  CheckCircle2Icon,
+  ImageIcon,
+  PinIcon,
+  SlidersHorizontalIcon,
+  XCircleIcon,
 } from "lucide-react"
 import dynamic from "next/dynamic"
 import * as React from "react"
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@ui-sdk/react/collapsible"
 import { toast } from "@ui-sdk/react/toast"
-
-import { ExpandDialog } from "@/components/ui-sdk/expand-dialog"
-import { ChartView } from "@/components/viz/chart-view"
-import { Explorer } from "@/components/viz/explorer"
 import type { z } from "zod"
 
+import { ExpandDialog } from "@/components/ui-sdk/expand-dialog"
+import { Button } from "@/components/ui/button"
+import { Trace, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace"
+import { ChartView } from "@/components/viz/chart-view"
+import { Explorer } from "@/components/viz/explorer"
 import type { chartInput, exploreInput, quizInput, show3dInput } from "@/lib/agent/schemas"
 import type { TutorUIMessage } from "@/lib/agent/types"
 import { cn } from "@/lib/utils"
@@ -47,40 +33,20 @@ type Part = TutorUIMessage["parts"][number]
 type ToolPart = Extract<Part, { type: `tool-${string}` }>
 type PartOf<N extends string> = Extract<Part, { type: `tool-${N}` }>
 
-const running = (p: ToolPart) => p.state === "input-streaming" || p.state === "input-available"
+/** Tools rendered as rich cards in the lesson (everything else is a Trace step). */
+export const MEDIA_TOOLS = new Set(["show_3d", "chart", "explore", "quiz", "find_images", "suggest_replies"])
 
-// ------------------------------------------------------------- shells
-
-function Chip({
-  icon,
-  children,
-  state,
-  onClick,
-  title,
-}: {
-  icon: React.ReactNode
-  children: React.ReactNode
-  state: ToolPart["state"]
-  onClick?: () => void
-  title?: string
-}) {
-  const busy = state === "input-streaming" || state === "input-available"
-  const failed = state === "output-error"
-  const Comp = onClick ? "button" : "div"
+/** While a card is still being built it shows as a single running Trace line. */
+function Building({ icon, children, failed }: { icon: React.ReactNode; children: React.ReactNode; failed?: boolean }) {
   return (
-    <Comp
-      type={onClick ? "button" : undefined}
-      onClick={onClick}
-      title={title}
-      className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0",
-        onClick && "transition-colors hover:border-primary/40 hover:text-foreground",
-        failed && "border-destructive/30 text-destructive"
-      )}
-    >
-      {busy ? <Loader2Icon className="animate-spin" /> : icon}
-      <span className="truncate">{children}</span>
-    </Comp>
+    <Trace>
+      <div>
+        <TraceLine status={failed ? "error" : "running"}>
+          <TraceIcon>{icon}</TraceIcon>
+          <TraceTitle>{children}</TraceTitle>
+        </TraceLine>
+      </div>
+    </Trace>
   )
 }
 
@@ -114,194 +80,28 @@ function Card({
   )
 }
 
-const host = (url: string) => {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "")
-  } catch {
-    return url
-  }
-}
-
-function Favicon({ url }: { url: string }) {
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      alt=""
-      src={`https://www.google.com/s2/favicons?domain=${host(url)}&sz=32`}
-      className="size-4 shrink-0 rounded-sm"
-      loading="lazy"
-    />
-  )
-}
-
-function SourceList({ sources }: { sources: { n: number; title: string; url: string; snippet?: string; date?: string }[] }) {
-  return (
-    <ol className="space-y-1.5">
-      {sources.map((s) => (
-        <li key={`${s.n}-${s.url}`}>
-          <a
-            href={s.url}
-            target="_blank"
-            rel="noreferrer"
-            className="group flex gap-2 rounded-lg p-1.5 transition-colors hover:bg-muted"
-          >
-            <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md bg-secondary font-mono text-[10px] text-secondary-foreground">
-              {s.n}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-1.5">
-                <Favicon url={s.url} />
-                <span className="truncate text-sm font-medium group-hover:underline">{s.title || host(s.url)}</span>
-              </span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {host(s.url)}
-                {s.date ? ` · ${s.date}` : ""}
-              </span>
-              {s.snippet ? <span className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{s.snippet}</span> : null}
-            </span>
-          </a>
-        </li>
-      ))}
-    </ol>
-  )
-}
-
-// -------------------------------------------------------- board tools
-
-const BOARD_LABEL: Record<string, (input: Record<string, unknown> | undefined) => string> = {
-  draw: (i) => `Drew: ${String(i?.title ?? "…")}`,
-  plot: (i) => `Graphed ${String(i?.title ?? (i?.functions as { expr: string }[] | undefined)?.map((f) => f.expr).join(", ") ?? "")}`,
-  annotate: (i) => (i?.note ? `Marked: ${String(i.note)}` : `Marked your work (${String(i?.style ?? "")})`),
-  point_at: (i) => (i?.caption ? `Pointed: ${String(i.caption)}` : "Pointed at the board"),
-  erase: () => "Erased some of my drawings",
-  ask_student: (i) => `Your turn: ${String(i?.task ?? "")}`,
-}
-const BOARD_ICON: Record<string, React.ReactNode> = {
-  draw: <PenLineIcon />,
-  plot: <LineChartIcon />,
-  annotate: <CircleDotIcon />,
-  point_at: <MousePointer2Icon />,
-  erase: <EraserIcon />,
-  ask_student: <HandIcon />,
-}
-
-function BoardToolChip({ part, name }: { part: ToolPart; name: string }) {
-  const { board } = useTutor()
-  const input = part.input as Record<string, unknown> | undefined
-  const label = BOARD_LABEL[name]?.(input) ?? name
-  const error = part.state === "output-error" ? part.errorText : undefined
-  return (
-    <Chip
-      icon={BOARD_ICON[name]}
-      state={part.state}
-      title={error ?? "Show on the board"}
-      onClick={part.state === "output-available" ? () => board?.focusStep(part.toolCallId) : undefined}
-    >
-      {error ? `${label} — failed` : label}
-    </Chip>
-  )
-}
-
-// ------------------------------------------------------- research tools
-
-function WebSearchCard({ part }: { part: PartOf<"web_search"> }) {
-  const query = part.input?.query
-  if (part.state !== "output-available") {
-    return (
-      <Chip icon={<SearchIcon />} state={part.state} title={part.state === "output-error" ? part.errorText : undefined}>
-        {part.state === "output-error" ? `Search failed: ${query}` : `Searching the web: ${query ?? ""}`}
-      </Chip>
-    )
-  }
-  const out = part.output
-  return (
-    <Collapsible className="rounded-xl border bg-card">
-      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground">
-        <SearchIcon className="size-3.5 text-primary" aria-hidden />
-        <span className="min-w-0 flex-1 truncate">
-          Searched <span className="text-foreground">“{out.query}”</span> · {out.results.length} results via {out.provider}
-        </span>
-        <span className="flex -space-x-1">
-          {out.results.slice(0, 4).map((r) => (
-            <span key={r.url} className="rounded-sm ring-2 ring-card">
-              <Favicon url={r.url} />
-            </span>
-          ))}
-        </span>
-        <ChevronDownIcon className="size-3.5 transition-transform group-data-open:rotate-180" aria-hidden />
-      </CollapsibleTrigger>
-      <CollapsiblePanel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 data-ending-style:h-0 data-starting-style:h-0">
-        <div className="border-t p-2">
-          <SourceList sources={out.results} />
-        </div>
-      </CollapsiblePanel>
-    </Collapsible>
-  )
-}
-
-function WebFetchChip({ part }: { part: PartOf<"web_fetch"> }) {
-  const url = part.input?.url ?? ""
-  if (part.state === "output-available") {
-    return (
-      <a href={part.output.url} target="_blank" rel="noreferrer">
-        <Chip icon={<FileTextIcon />} state={part.state}>
-          Read: {part.output.title || host(url)}
-        </Chip>
-      </a>
-    )
-  }
-  return (
-    <Chip icon={<GlobeIcon />} state={part.state} title={part.state === "output-error" ? part.errorText : undefined}>
-      {part.state === "output-error" ? `Couldn't read ${host(url)}` : `Reading ${host(url)}…`}
-    </Chip>
-  )
-}
-
-function ResearchCard({ part }: { part: PartOf<"research"> }) {
-  if (part.state !== "output-available") {
-    return (
-      <Chip icon={<SparklesIcon />} state={part.state} title={part.state === "output-error" ? part.errorText : undefined}>
-        {part.state === "output-error" ? "Research failed" : `Researching: ${part.input?.question ?? ""}`}
-      </Chip>
-    )
-  }
-  const out = part.output
-  return (
-    <Card
-      icon={<SparklesIcon />}
-      title="Research brief"
-      subtitle={`${out.question} · ${out.sources.length} sources`}
-    >
-      <Collapsible defaultOpen={false}>
-        <div className="line-clamp-4 text-sm whitespace-pre-wrap text-muted-foreground">{out.brief}</div>
-        <CollapsiblePanel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 data-ending-style:h-0 data-starting-style:h-0">
-          <div className="mt-2">
-            <SourceList sources={out.sources} />
-          </div>
-        </CollapsiblePanel>
-        <CollapsibleTrigger className="mt-2 text-xs font-medium text-primary hover:underline">
-          {(s) => (s.open ? "Hide sources" : `Show ${out.sources.length} sources`)}
-        </CollapsibleTrigger>
-      </Collapsible>
-    </Card>
-  )
-}
-
 function ImagesCard({ part }: { part: PartOf<"find_images"> }) {
   const { board } = useTutor()
   if (part.state !== "output-available") {
     return (
-      <Chip icon={<ImageIcon />} state={part.state}>
-        {part.state === "output-error" ? "Image search failed" : `Finding images: ${part.input?.query ?? ""}`}
-      </Chip>
+      <Building icon={<ImageIcon />} failed={part.state === "output-error"}>
+        {part.state === "output-error" ? "Image search failed" : `Finding images of ${part.input?.query ?? "…"}`}
+      </Building>
     )
   }
   const images = part.output.images
   if (!images.length) {
     return (
-      <Chip icon={<ImageIcon />} state={part.state}>
-        No openly licensed images for “{part.output.query}”
-      </Chip>
+      <Trace>
+        <div>
+          <TraceLine>
+            <TraceIcon>
+              <ImageIcon />
+            </TraceIcon>
+            <TraceTitle>No openly licensed images for “{part.output.query}”</TraceTitle>
+          </TraceLine>
+        </div>
+      </Trace>
     )
   }
   return (
@@ -318,8 +118,9 @@ function ImagesCard({ part }: { part: PartOf<"find_images"> }) {
               {[img.author, img.license].filter(Boolean).join(" · ") || "Wikimedia Commons"}
             </div>
           </figcaption>
-          <button
-            type="button"
+          <Button
+            size="xs"
+            variant="secondary"
             onClick={() =>
               board
                 ?.addImage({
@@ -331,69 +132,37 @@ function ImagesCard({ part }: { part: PartOf<"find_images"> }) {
                 })
                 .catch((e: Error) => toast.error("Couldn't pin image", { description: e.message }))
             }
-            className="absolute top-1.5 right-1.5 inline-flex items-center gap-1 rounded-md bg-background/90 px-1.5 py-1 text-[11px] font-medium opacity-0 shadow-sm ring-1 ring-border backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            className="absolute top-1.5 right-1.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
           >
-            <PinIcon className="size-3" aria-hidden /> Pin to board
-          </button>
+            <PinIcon /> Pin to board
+          </Button>
         </figure>
       ))}
     </div>
   )
 }
 
-function CalcChip({ part }: { part: PartOf<"calculate"> }) {
-  const expr = part.input?.expression ?? ""
-  if (part.state !== "output-available") {
-    return (
-      <Chip icon={<CalculatorIcon />} state={part.state}>
-        Calculating {expr}
-      </Chip>
-    )
-  }
-  const out = part.output
-  return (
-    <div className="inline-flex max-w-full items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 font-mono text-xs">
-      <CalculatorIcon className="size-3.5 shrink-0 text-primary" aria-hidden />
-      <span className="truncate text-muted-foreground">
-        {out.operation === "evaluate" ? "" : `${out.operation} `}
-        {out.expression}
-      </span>
-      <span className="text-muted-foreground">→</span>
-      <span className={cn("truncate font-medium", "error" in out && out.error && "text-destructive")}>
-        {"error" in out && out.error ? out.error : "result" in out ? out.result : ""}
-      </span>
-    </div>
-  )
-}
-
-// -------------------------------------------------------- rich media
-
 function Scene3DCard({ part }: { part: PartOf<"show_3d"> }) {
-  // Rendered progressively while the scene streams in; objects appear as they arrive.
   const spec = part.input as Partial<z.infer<typeof show3dInput>> | undefined
-  if (!spec?.objects?.length) {
-    return (
-      <Chip icon={<BoxIcon />} state={part.state}>
-        Building a 3D model…
-      </Chip>
-    )
+  const ready = part.state === "input-available" || part.state === "output-available"
+  if (!spec?.objects?.length || !ready) {
+    return <Building icon={<BoxIcon />}>Building a 3D model{spec?.title ? ` of ${spec.title}` : ""}</Building>
   }
-  const ready = !running(part) || part.state === "input-available"
   return (
     <Card
       icon={<BoxIcon />}
       title={spec.title ?? "3D model"}
       subtitle={spec.caption ?? "Drag to orbit · scroll to zoom"}
       actions={
-        ready ? (
-          <ExpandDialog title={spec.title ?? "3D model"} description={spec.caption}>
-            <Scene3D spec={spec} />
-          </ExpandDialog>
-        ) : null
+        <ExpandDialog title={spec.title ?? "3D model"} description={spec.caption}>
+          <Scene3D spec={spec} />
+        </ExpandDialog>
       }
       className="[&>div:last-child]:p-0"
     >
-      <div className="h-72 bg-(--chart-surface)">{ready ? <Scene3D spec={spec} /> : null}</div>
+      <div className="h-72 bg-(--chart-surface)">
+        <Scene3D spec={spec} />
+      </div>
     </Card>
   )
 }
@@ -401,11 +170,7 @@ function Scene3DCard({ part }: { part: PartOf<"show_3d"> }) {
 function ChartCard({ part }: { part: PartOf<"chart"> }) {
   const spec = part.input as z.infer<typeof chartInput> | undefined
   if (!spec?.data?.length || part.state === "input-streaming") {
-    return (
-      <Chip icon={<BarChart3Icon />} state={part.state}>
-        Charting {spec?.title ?? "data"}…
-      </Chip>
-    )
+    return <Building icon={<BarChart3Icon />}>Charting {spec?.title ?? "the data"}</Building>
   }
   return (
     <Card
@@ -428,11 +193,7 @@ function ChartCard({ part }: { part: PartOf<"chart"> }) {
 function ExplorerCard({ part }: { part: PartOf<"explore"> }) {
   const spec = part.input as z.infer<typeof exploreInput> | undefined
   if (!spec?.expr || !spec.params?.length || part.state === "input-streaming") {
-    return (
-      <Chip icon={<SlidersHorizontalIcon />} state={part.state}>
-        Building an explorer…
-      </Chip>
-    )
+    return <Building icon={<SlidersHorizontalIcon />}>Building an explorer</Building>
   }
   return (
     <Card
@@ -459,11 +220,7 @@ function QuizCard({ part }: { part: PartOf<"quiz"> }) {
   const answered = part.state === "output-available" ? part.output : null
   const [picked, setPicked] = React.useState<number | null>(null)
   if (!input?.options?.length || part.state === "input-streaming") {
-    return (
-      <Chip icon={<CheckCircle2Icon />} state={part.state}>
-        Writing a question…
-      </Chip>
-    )
+    return <Building icon={<CheckCircle2Icon />}>Writing a question</Building>
   }
   const chosenIndex = (answered as { chosenIndex?: number } | null)?.chosenIndex ?? picked
   const done = chosenIndex !== null && chosenIndex !== undefined
@@ -505,55 +262,26 @@ function QuizCard({ part }: { part: PartOf<"quiz"> }) {
   )
 }
 
+/** shadcn Suggestion pattern: outline pill buttons under the last reply. */
 export function SuggestedReplies({ part }: { part: PartOf<"suggest_replies"> }) {
   const { send, busy } = useTutor()
   const options = (part.input?.options ?? []).filter((o): o is string => !!o)
   if (!options.length) return null
   return (
-    <div className="flex flex-wrap gap-1.5 pt-1">
+    <div className="flex flex-wrap gap-2">
       {options.map((o) => (
-        <button
-          key={o}
-          type="button"
-          disabled={busy}
-          onClick={() => send(o)}
-          className="rounded-full border border-primary/25 bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground transition-colors hover:border-primary/50 disabled:opacity-50"
-        >
+        <Button key={o} variant="outline" size="sm" className="rounded-full" disabled={busy} onClick={() => send(o)}>
           {o}
-        </button>
+        </Button>
       ))}
     </div>
   )
 }
 
-// ---------------------------------------------------------------- router
-
-export function ToolPartView({ part, isLast }: { part: ToolPart; isLast: boolean }) {
-  const name = part.type.slice(5)
-  switch (name) {
-    case "draw":
-    case "plot":
-    case "annotate":
-    case "point_at":
-    case "erase":
-    case "ask_student":
-      return <BoardToolChip part={part} name={name} />
-    case "web_search":
-      return <WebSearchCard part={part as PartOf<"web_search">} />
-    case "web_fetch":
-      return <WebFetchChip part={part as PartOf<"web_fetch">} />
-    case "research":
-      return <ResearchCard part={part as PartOf<"research">} />
+export function MediaPartView({ part, isLast }: { part: ToolPart; isLast: boolean }) {
+  switch (part.type.slice(5)) {
     case "find_images":
       return <ImagesCard part={part as PartOf<"find_images">} />
-    case "calculate":
-      return <CalcChip part={part as PartOf<"calculate">} />
-    case "look_closer":
-      return (
-        <Chip icon={<EyeIcon />} state={part.state}>
-          Looked closely: {(part as PartOf<"look_closer">).input?.question ?? ""}
-        </Chip>
-      )
     case "show_3d":
       return <Scene3DCard part={part as PartOf<"show_3d">} />
     case "chart":

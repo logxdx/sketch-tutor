@@ -1,14 +1,21 @@
 import type { InferUITools, UIMessage } from "ai"
 
+import type { createLibraryTools } from "@/lib/context/tools"
+import type { MessageAttachment } from "@/lib/context/types"
 import type { clientTools } from "./client-tools"
 import type { ServerTools } from "./server-tools"
 
-export type TutorTools = typeof clientTools & ServerTools
+export type TutorTools = typeof clientTools & ServerTools & ReturnType<typeof createLibraryTools>
 
 export type TutorMessageMetadata = {
   /** chat = typed; watch = automatic nudge while the student draws; check = "check my work". */
   kind?: "chat" | "watch" | "check"
+  /** Library documents / folders attached to this message. */
+  attachments?: MessageAttachment[]
 }
+
+/** File name the board snapshot is sent with (other image parts are student uploads). */
+export const BOARD_SNAPSHOT_NAME = "board.jpg"
 
 export type TutorDataParts = {
   status: { stage: "perceive" | "think"; label: string }
@@ -42,4 +49,5 @@ export type ChatRequestBody = {
   subject?: Subject
   mode?: Mode
   board?: string | null
+  libraryId?: string | null
 }

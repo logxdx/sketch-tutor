@@ -6,31 +6,40 @@ import {
 } from "ai"
 
 import { getModel, tutorSeesImages, visionEnabled } from "@/lib/agent/models"
-import { createTutorAgent, readBoard } from "@/lib/agent/tutor-agent"
-import type { ChatRequestBody, TutorUIMessage } from "@/lib/agent/types"
+import { createTutorAgent, describeImages, readBoard } from "@/lib/agent/tutor-agent"
+import { BOARD_SNAPSHOT_NAME, type ChatRequestBody, type TutorUIMessage } from "@/lib/agent/types"
+import { isValidLibraryId } from "@/lib/context/store"
+import { librarySection } from "@/lib/context/tools"
 
 export const maxDuration = 120
 
-const isImage = (p: TutorUIMessage["parts"][number]) =>
-  p.type === "file" && p.mediaType.startsWith("image/")
+type Part = TutorUIMessage["parts"][number]
+const isImage = (p: Part): p is Extract<Part, { type: "file" }> => p.type === "file" && p.mediaType.startsWith("image/")
+const isSnapshot = (p: Part) => isImage(p) && p.filename === BOARD_SNAPSHOT_NAME
+const isUpload = (p: Part) => isImage(p) && p.filename !== BOARD_SNAPSHOT_NAME
+
+/** Most images the tutor model receives in one request (Groq caps at 5). */
+const MAX_IMAGES = 5
 
 /** Latest board snapshot the student sent (data URL), if any. */
 function latestSnapshot(messages: TutorUIMessage[]) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.role !== "user") continue
-    const part = m.parts.find(isImage)
+    const part = m.parts.find(isSnapshot)
     if (part && part.type === "file") return part.url
   }
   return null
 }
 
 /**
- * The tutor model only needs at most the newest picture (and none at all when
- * a separate vision model reads it). Older pictures are stale and expensive.
+ * What the tutor model sees. With a multimodal tutor: the newest board
+ * snapshot plus the student's recent uploaded images (newest first, capped).
+ * Otherwise no images — the vision stage has already turned them into text.
  */
-function prepareMessages(messages: TutorUIMessage[], keepLatestImage: boolean) {
-  let kept = false
+function prepareMessages(messages: TutorUIMessage[], nativeVision: boolean) {
+  let snapshotKept = false
+  let budget = MAX_IMAGES
   return messages
     .slice()
     .reverse()
@@ -38,21 +47,24 @@ function prepareMessages(messages: TutorUIMessage[], keepLatestImage: boolean) {
       if (m.role !== "user") return m
       const parts = m.parts.filter((p) => {
         if (!isImage(p)) return true
-        if (keepLatestImage && !kept) {
-          kept = true
-          return true
+        if (!nativeVision || budget <= 0) return false
+        if (isSnapshot(p)) {
+          if (snapshotKept) return false
+          snapshotKept = true
         }
-        return false
+        budget--
+        return true
       })
-      return { ...m, parts: parts.length ? parts : [{ type: "text" as const, text: "(board updated)" }] }
+      return { ...m, parts: parts.length ? parts : [{ type: "text" as const, text: "(see attachments)" }] }
     })
     .reverse()
 }
 
 export async function POST(req: Request) {
-  const { messages, subject, mode, board } = (await req.json()) as ChatRequestBody & {
+  const { messages, subject, mode, board, libraryId: rawLibraryId } = (await req.json()) as ChatRequestBody & {
     messages: TutorUIMessage[]
   }
+  const libraryId = isValidLibraryId(rawLibraryId) ? rawLibraryId : null
 
   try {
     getModel("tutor") // fail fast with a readable error when keys are missing
@@ -60,38 +72,67 @@ export async function POST(req: Request) {
     return Response.json({ error: (error as Error).message }, { status: 500 })
   }
 
-  const snapshot = visionEnabled() ? latestSnapshot(messages) : null
-  const last = messages.at(-1)
-  const freshPicture = !!snapshot && last?.role === "user" && last.parts.some(isImage)
+  const vision = visionEnabled()
   const nativeVision = tutorSeesImages()
+  const snapshot = vision ? latestSnapshot(messages) : null
+  const lastUser = messages.findLast((m) => m.role === "user")
+  const last = messages.at(-1)
+  const freshTurn = last?.role === "user"
+  const freshSnapshot = freshTurn && !!last && last.parts.some(isSnapshot)
+  // Images the student attached to their latest message (for look_closer and perception).
+  const uploads = vision
+    ? (lastUser?.parts.filter(isUpload) ?? []).map((p) => (p.type === "file" ? p.url : "")).filter(Boolean)
+    : []
+  const attachments = lastUser?.metadata?.attachments ?? []
 
   const stream = createUIMessageStream<TutorUIMessage>({
     originalMessages: messages,
     execute: async ({ writer }) => {
-      // Stage 1 — perception: read the board when the student just sent a new picture.
+      const status = (label: string, stage: "perceive" | "think" = "perceive") =>
+        writer.write({ type: "data-status", data: { stage, label }, transient: true })
+
+      // Stage 1 — perception (only when the tutor model can't see images itself).
       let boardReading: string | null = null
-      if (freshPicture && !nativeVision) {
-        writer.write({
-          type: "data-status",
-          data: { stage: "perceive", label: "Looking at your board…" },
-          transient: true,
-        })
-        boardReading = await readBoard(snapshot!, board, req.signal).catch((e) => {
-          console.warn("[tutor] board reading failed:", (e as Error).message)
-          return null
-        })
+      let imageReading: string | null = null
+      if (!nativeVision && freshTurn) {
+        const jobs: Promise<void>[] = []
+        if (freshSnapshot && snapshot) {
+          status("Looking at your board…")
+          jobs.push(
+            readBoard(snapshot, board, req.signal)
+              .then((r) => void (boardReading = r))
+              .catch((e) => console.warn("[tutor] board reading failed:", (e as Error).message))
+          )
+        }
+        if (uploads.length) {
+          status(`Reading your image${uploads.length > 1 ? "s" : ""}…`)
+          jobs.push(
+            describeImages(uploads, req.signal)
+              .then((r) => void (imageReading = r))
+              .catch((e) => console.warn("[tutor] image reading failed:", (e as Error).message))
+          )
+        }
+        await Promise.all(jobs)
       }
-      writer.write({
-        type: "data-status",
-        data: { stage: "think", label: "Thinking…" },
-        transient: true,
-      })
+      if (attachments.length) status("Reading your files…")
+      const library = await librarySection(libraryId, freshTurn ? attachments : []).catch(() => "")
+      status("Thinking…", "think")
 
       // Stage 2 — the tutor agent loop.
-      const agent = createTutorAgent({ subject, mode, board, boardReading, snapshot })
+      const agent = createTutorAgent({
+        subject,
+        mode,
+        board,
+        boardReading,
+        imageReading,
+        library,
+        libraryId,
+        snapshot,
+        images: uploads,
+      })
       const agentStream = await createAgentUIStream({
         agent,
-        uiMessages: prepareMessages(messages, nativeVision && visionEnabled()),
+        uiMessages: prepareMessages(messages, nativeVision && vision),
         abortSignal: req.signal,
         sendReasoning: true,
         sendSources: true,

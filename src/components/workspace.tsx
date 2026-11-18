@@ -26,7 +26,8 @@ import { ChatPanel } from "@/components/chat/chat-panel"
 import { TutorContext, type TutorActions } from "@/components/chat/tutor-context"
 import { CommandPalette, type PaletteAction } from "@/components/ui-sdk/command-palette"
 import { IconButton, PickList, Segmented, Toggle } from "@/components/ui-sdk/controls"
-import { MODES, SUBJECTS, type Mode, type Subject, type TutorUIMessage } from "@/lib/agent/types"
+import { BOARD_SNAPSHOT_NAME, MODES, SUBJECTS, type Mode, type Subject, type TutorUIMessage } from "@/lib/agent/types"
+import { useLibrary } from "@/lib/context/use-library"
 import type { BoardController, ToolResult } from "@/lib/board/controller"
 import { playDemo } from "@/lib/board/demo"
 import type { DrawSpeed } from "@/lib/board/types"
@@ -95,6 +96,11 @@ export function Workspace() {
     settings.current = { subject, mode }
   }, [subject, mode])
   const pendingBoardText = React.useRef<string | null>(null)
+  const library = useLibrary()
+  const libraryIdRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    libraryIdRef.current = library.libraryId
+  }, [library.libraryId])
   const autoTurns = React.useRef(0)
 
   // The body getter runs per request (not during render), so reading refs there is intended.
@@ -106,7 +112,7 @@ export function Workspace() {
         body: () => {
           const text = pendingBoardText.current ?? boardRef.current?.describe() ?? null
           pendingBoardText.current = null
-          return { ...settings.current, board: text }
+          return { ...settings.current, board: text, libraryId: libraryIdRef.current }
         },
       }),
     []
@@ -181,15 +187,15 @@ export function Workspace() {
   }, [busy])
 
   const send = React.useCallback<TutorActions["send"]>(
-    async (text, kind = "chat") => {
+    async (text, kind = "chat", extras) => {
       const b = boardRef.current
       const s = b?.getStatus()
-      let files: { type: "file"; mediaType: string; url: string; filename: string }[] | undefined
-      // Share a picture only when it adds something the text description can't.
+      const files: { type: "file"; mediaType: string; url: string; filename: string }[] = [...(extras?.files ?? [])]
+      // Share a picture of the board only when it adds something the text description can't.
       if (b && s && !s.isEmpty && (kind !== "chat" || s.studentDirty || s.yourTurn || s.selection.length)) {
         try {
           const url = await b.snapshot()
-          if (url) files = [{ type: "file", mediaType: "image/jpeg", url, filename: "board.jpg" }]
+          if (url) files.push({ type: "file", mediaType: "image/jpeg", url, filename: BOARD_SNAPSHOT_NAME })
         } catch (e) {
           console.warn("snapshot failed", e)
         }
@@ -197,7 +203,8 @@ export function Workspace() {
       pendingBoardText.current = b?.describe() ?? null
       autoTurns.current = 0
       setStatusLabel(null)
-      sendMessage({ text, files, metadata: { kind } })
+      const attachments = extras?.attachments?.length ? extras.attachments : undefined
+      sendMessage({ text, files: files.length ? files : undefined, metadata: { kind, attachments } })
       b?.markSeen({ closeTask: kind === "check" })
     },
     [sendMessage]
@@ -375,6 +382,7 @@ export function Workspace() {
       statusLabel={statusLabel}
       error={error}
       board={boardStatus}
+      library={library}
       onStop={stopAll}
       onRetry={() => regenerate()}
     />
