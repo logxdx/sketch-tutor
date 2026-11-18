@@ -12,6 +12,10 @@ export type TutorMessageMetadata = {
   kind?: "chat" | "watch" | "check"
   /** Library documents / folders attached to this message. */
   attachments?: MessageAttachment[]
+  /** Assistant replies: which model, provider and thinking level produced them. */
+  model?: string
+  provider?: string
+  effort?: string
 }
 
 /** File name the board snapshot is sent with (other image parts are student uploads). */

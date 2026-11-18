@@ -3,6 +3,7 @@ import "server-only"
 import { tool } from "ai"
 import { z } from "zod"
 
+import type { TutorSettings } from "@/lib/agent/settings"
 import { askVision } from "@/lib/agent/vision"
 import { getPageImage, pageImageUrl } from "./pages"
 import {
@@ -26,7 +27,7 @@ export type LibraryHit = {
 }
 
 /** Tools over the student's own material (PDFs, notes, code, whole folders). */
-export function createLibraryTools(libraryId: string | null) {
+export function createLibraryTools(libraryId: string | null, settings?: TutorSettings) {
   return {
     library_search: tool({
       description:
@@ -114,7 +115,8 @@ export function createLibraryTools(libraryId: string | null) {
         const answer = await askVision(
           [{ data: new Uint8Array(png), mediaType: "image/png" }],
           `This is page ${page} of "${doc.path}", from a student's study material. ${question}\nBe precise: transcribe text and maths exactly (LaTeX for maths), describe figures with their labels and axes. No preamble.`,
-          abortSignal
+          abortSignal,
+          settings
         )
         return {
           file: doc.path,

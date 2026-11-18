@@ -3,7 +3,8 @@ import "server-only"
 import { isStepCount, tool, ToolLoopAgent } from "ai"
 import { z } from "zod"
 
-import { getModel } from "../models"
+import { callSettings, getModel } from "../models"
+import type { TutorSettings } from "../settings"
 import { fetchAndExtract } from "./fetch"
 import { normalizeDomain, searchWithFallback } from "./search"
 
@@ -82,7 +83,7 @@ Your FINAL message is the whole deliverable and must stand alone:
 2. Title — URL
 Only list sources you actually used. Never invent URLs.`
 
-export function createResearchTool() {
+export function createResearchTool(settings?: TutorSettings) {
   return tool({
     description:
       "Deep research by a sub-agent that searches the web from several angles, reads the best pages and returns a sourced brief. Use for questions that need several sources or current facts; use web_search for a single quick lookup.",
@@ -92,7 +93,8 @@ export function createResearchTool() {
     execute: async ({ question }, { abortSignal }) => {
       const sources = new Map<string, WebSource>()
       const researcher = new ToolLoopAgent({
-        model: getModel("research"),
+        ...callSettings(settings, "research"),
+        model: getModel("research", settings),
         instructions: RESEARCHER_INSTRUCTIONS,
         tools: { web_search: webSearchTool, web_fetch: webFetchTool },
         stopWhen: isStepCount(10),

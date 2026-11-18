@@ -3,6 +3,7 @@ import "server-only"
 import { tool } from "ai"
 import { z } from "zod"
 
+import type { TutorSettings } from "./settings"
 import { askVision, fromDataUrl } from "./vision"
 import { chartInput, exploreInput, show3dInput, suggestRepliesInput } from "./schemas"
 import { createResearchTool, webFetchTool, webSearchTool } from "./web/tools"
@@ -158,12 +159,12 @@ export async function calculate(input: {
 
 // ---------------------------------------------------------------- tools
 
-export function createServerTools(ctx: { snapshot: string | null; images: string[] }) {
+export function createServerTools(ctx: { snapshot: string | null; images: string[]; settings?: TutorSettings }) {
   return {
     // Web tools ported from the pi agent setup (see ./web).
     web_search: webSearchTool,
     web_fetch: webFetchTool,
-    research: createResearchTool(),
+    research: createResearchTool(ctx.settings),
 
     find_images: tool({
       description:
@@ -209,7 +210,8 @@ export function createServerTools(ctx: { snapshot: string | null; images: string
         const answer = await askVision(
           [fromDataUrl(url)],
           `${image ? "This is an image the student shared with their tutor." : "This is a shared whiteboard between a tutor and a student."} ${question}\nAnswer precisely and briefly; transcribe handwriting exactly.`,
-          abortSignal
+          abortSignal,
+          ctx.settings
         )
         return { answer }
       },

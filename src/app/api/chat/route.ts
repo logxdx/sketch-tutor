@@ -5,7 +5,8 @@ import {
   type InferUIMessageChunk,
 } from "ai"
 
-import { getModel, tutorSeesImages, visionEnabled } from "@/lib/agent/models"
+import { getModel, modelId, providerFor, tutorSeesImages, visionEnabled } from "@/lib/agent/models"
+import { parseSettings } from "@/lib/agent/settings"
 import { createTutorAgent, describeImages, readBoard } from "@/lib/agent/tutor-agent"
 import { BOARD_SNAPSHOT_NAME, type ChatRequestBody, type TutorUIMessage } from "@/lib/agent/types"
 import { isValidLibraryId } from "@/lib/context/store"
@@ -61,19 +62,20 @@ function prepareMessages(messages: TutorUIMessage[], nativeVision: boolean) {
 }
 
 export async function POST(req: Request) {
-  const { messages, subject, mode, board, libraryId: rawLibraryId } = (await req.json()) as ChatRequestBody & {
-    messages: TutorUIMessage[]
-  }
+  const body = (await req.json()) as ChatRequestBody & { messages: TutorUIMessage[]; settings?: unknown }
+  const { messages, subject, mode, board, libraryId: rawLibraryId } = body
   const libraryId = isValidLibraryId(rawLibraryId) ? rawLibraryId : null
+  // Model / provider / sampling choices from the Settings panel (validated; bad values fall back to defaults).
+  const settings = parseSettings(body.settings)
 
   try {
-    getModel("tutor") // fail fast with a readable error when keys are missing
+    getModel("tutor", settings) // fail fast with a readable error when keys are missing
   } catch (error) {
     return Response.json({ error: (error as Error).message }, { status: 500 })
   }
 
   const vision = visionEnabled()
-  const nativeVision = tutorSeesImages()
+  const nativeVision = tutorSeesImages(settings)
   const snapshot = vision ? latestSnapshot(messages) : null
   const lastUser = messages.findLast((m) => m.role === "user")
   const last = messages.at(-1)
@@ -99,7 +101,7 @@ export async function POST(req: Request) {
         if (freshSnapshot && snapshot) {
           status("Looking at your board…")
           jobs.push(
-            readBoard(snapshot, board, req.signal)
+            readBoard(snapshot, board, req.signal, settings)
               .then((r) => void (boardReading = r))
               .catch((e) => console.warn("[tutor] board reading failed:", (e as Error).message))
           )
@@ -107,7 +109,7 @@ export async function POST(req: Request) {
         if (uploads.length) {
           status(`Reading your image${uploads.length > 1 ? "s" : ""}…`)
           jobs.push(
-            describeImages(uploads, req.signal)
+            describeImages(uploads, req.signal, settings)
               .then((r) => void (imageReading = r))
               .catch((e) => console.warn("[tutor] image reading failed:", (e as Error).message))
           )
@@ -129,13 +131,19 @@ export async function POST(req: Request) {
         libraryId,
         snapshot,
         images: uploads,
+        settings,
       })
       const agentStream = await createAgentUIStream({
         agent,
         uiMessages: prepareMessages(messages, nativeVision && vision),
         abortSignal: req.signal,
-        sendReasoning: true,
+        sendReasoning: settings.showReasoning,
         sendSources: true,
+        // Tag the reply with what produced it (shown under the message).
+        messageMetadata: ({ part }) =>
+          part.type === "start"
+            ? { model: modelId("tutor", settings), provider: providerFor(settings), effort: settings.reasoning }
+            : undefined,
       })
       // The agent's stream carries our tools' parts; TutorUIMessage adds only the transient status data part.
       writer.merge(agentStream as unknown as ReadableStream<InferUIMessageChunk<TutorUIMessage>>)

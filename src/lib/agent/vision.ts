@@ -2,7 +2,8 @@ import "server-only"
 
 import { generateText } from "ai"
 
-import { getModel } from "./models"
+import { callSettings, getModel } from "./models"
+import type { TutorSettings } from "./settings"
 
 export type VisionImage = { data: URL | Uint8Array; mediaType: string }
 
@@ -17,10 +18,16 @@ export const fromDataUrl = (url: string): VisionImage => ({
  * their whole output budget thinking, so the budget is generous and an empty
  * reply is retried once before giving up with an explicit note.
  */
-export async function askVision(images: VisionImage[], prompt: string, signal?: AbortSignal): Promise<string> {
+export async function askVision(
+  images: VisionImage[],
+  prompt: string,
+  signal?: AbortSignal,
+  settings?: TutorSettings
+): Promise<string> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const { text } = await generateText({
-      model: getModel("vision"),
+      ...callSettings(settings, "vision"),
+      model: getModel("vision", settings),
       abortSignal: signal,
       maxOutputTokens: 6000,
       messages: [

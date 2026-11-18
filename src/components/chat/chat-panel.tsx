@@ -38,6 +38,7 @@ import type { TutorUIMessage } from "@/lib/agent/types"
 import type { BoardStatus } from "@/lib/board/types"
 import { fromDataTransfer } from "@/lib/context/client"
 import type { LibraryApi } from "@/lib/context/use-library"
+import type { SettingsApi } from "@/lib/settings/use-settings"
 import { cn } from "@/lib/utils"
 import { Composer } from "./composer"
 import { FilePickers, type FilePickersHandle } from "./file-pickers"
@@ -138,6 +139,8 @@ export function ChatPanel({
   library,
   onStop,
   onRetry,
+  settings,
+  onOpenSettings,
 }: {
   messages: TutorUIMessage[]
   status: "submitted" | "streaming" | "ready" | "error"
@@ -147,6 +150,8 @@ export function ChatPanel({
   library: LibraryApi
   onStop: () => void
   onRetry: () => void
+  settings: SettingsApi
+  onOpenSettings: () => void
 }) {
   const { send } = useTutor()
   const [view, setView] = React.useState<View>("lesson")
@@ -305,6 +310,8 @@ export function ChatPanel({
           }}
           onStop={onStop}
           onOpenLibrary={() => setView("library")}
+          settings={settings}
+          onOpenSettings={onOpenSettings}
         />
       </div>
 

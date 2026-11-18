@@ -12,6 +12,7 @@ import {
   MoonIcon,
   PlayIcon,
   PlusIcon,
+  Settings2Icon,
   SquareIcon,
   SunIcon,
   Trash2Icon,
@@ -24,10 +25,12 @@ import { toast } from "@ui-sdk/react/toast"
 
 import { ChatPanel } from "@/components/chat/chat-panel"
 import { TutorContext, type TutorActions } from "@/components/chat/tutor-context"
+import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { CommandPalette, type PaletteAction } from "@/components/ui-sdk/command-palette"
 import { IconButton, PickList, Segmented, Toggle } from "@/components/ui-sdk/controls"
 import { BOARD_SNAPSHOT_NAME, MODES, SUBJECTS, type Mode, type Subject, type TutorUIMessage } from "@/lib/agent/types"
 import { useLibrary } from "@/lib/context/use-library"
+import { useSettings } from "@/lib/settings/use-settings"
 import type { BoardController, ToolResult } from "@/lib/board/controller"
 import { playDemo } from "@/lib/board/demo"
 import type { DrawSpeed } from "@/lib/board/types"
@@ -42,7 +45,6 @@ const Whiteboard = dynamic(() => import("@/components/board/whiteboard"), {
 
 /** Board tools the browser executes (quiz waits for a click instead). */
 const BOARD_TOOLS = new Set(["draw", "plot", "annotate", "point_at", "erase", "ask_student"])
-const MAX_AUTO_TURNS = 12
 const WATCH_IDLE_MS = 3500
 
 function useIsNarrow() {
@@ -97,6 +99,12 @@ export function Workspace() {
   }, [subject, mode])
   const pendingBoardText = React.useRef<string | null>(null)
   const library = useLibrary()
+  const settingsApi = useSettings()
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const tutorSettingsRef = React.useRef(settingsApi.settings)
+  React.useEffect(() => {
+    tutorSettingsRef.current = settingsApi.settings
+  }, [settingsApi.settings])
   const libraryIdRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     libraryIdRef.current = library.libraryId
@@ -112,7 +120,12 @@ export function Workspace() {
         body: () => {
           const text = pendingBoardText.current ?? boardRef.current?.describe() ?? null
           pendingBoardText.current = null
-          return { ...settings.current, board: text, libraryId: libraryIdRef.current }
+          return {
+            ...settings.current,
+            board: text,
+            libraryId: libraryIdRef.current,
+            settings: tutorSettingsRef.current,
+          }
         },
       }),
     []
@@ -174,7 +187,7 @@ export function Workspace() {
         const stepStart = parts.findLastIndex((p) => p.type === "step-start")
         const step = parts.slice(stepStart + 1)
         if (step.some((p) => p.type === "tool-ask_student")) return false
-        if (autoTurns.current >= MAX_AUTO_TURNS) return false
+        if (autoTurns.current >= tutorSettingsRef.current.agent.autoContinue) return false
         autoTurns.current++
         return true
       },
@@ -239,6 +252,7 @@ export function Workspace() {
   }, [watch, send])
 
   useShortcut("escape", () => busy && stopAll(), { description: "Stop the tutor", when: () => busy })
+  useShortcut("mod+,", () => setSettingsOpen(true), { description: "Open settings" })
 
   const newLesson = React.useCallback(() => {
     stopAll()
@@ -299,6 +313,7 @@ export function Workspace() {
     })),
     { id: "fit", group: "Board", label: "Zoom to fit everything", icon: <LayoutGridIcon />, run: () => board?.focusAll() },
     { id: "clear", group: "Board", label: "Clear the board", icon: <Trash2Icon />, run: () => board?.clearBoard() },
+    { id: "settings", group: "Appearance", label: "Settings — models, thinking, sampling", icon: <Settings2Icon />, shortcut: "mod+,", keywords: ["model", "provider", "temperature", "effort", "reasoning"], run: () => setSettingsOpen(true) },
     { id: "theme", group: "Appearance", label: theme === "dark" ? "Light theme" : "Dark theme", icon: theme === "dark" ? <SunIcon /> : <MoonIcon />, run: toggleTheme },
   ]
 
@@ -383,6 +398,8 @@ export function Workspace() {
       error={error}
       board={boardStatus}
       library={library}
+      settings={settingsApi}
+      onOpenSettings={() => setSettingsOpen(true)}
       onStop={stopAll}
       onRetry={() => regenerate()}
     />
@@ -414,6 +431,9 @@ export function Workspace() {
             <IconButton label={theme === "dark" ? "Light theme" : "Dark theme"} onClick={toggleTheme}>
               {theme === "dark" ? <SunIcon /> : <MoonIcon />}
             </IconButton>
+            <IconButton label="Settings" shortcut="mod+," onClick={() => setSettingsOpen(true)}>
+              <Settings2Icon />
+            </IconButton>
             <IconButton label="New lesson" onClick={newLesson}>
               <PlusIcon />
             </IconButton>
@@ -437,6 +457,13 @@ export function Workspace() {
           </ResizablePanel>
         </Resizable>
       </div>
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        api={settingsApi}
+        speed={boardStatus.speed}
+        onSpeedChange={(sp) => board?.setSpeed(sp)}
+      />
     </TutorContext.Provider>
   )
 }

@@ -17,6 +17,7 @@ it watch you draw and nudge you along.
 | **Sources & images** | Web search, page/PDF reading and a research sub-agent with numbered citations; openly licensed Wikimedia images you can pin onto the board. |
 | **Exact maths** | math.js engine for arithmetic, units, simplification, derivatives and roots. |
 | **Your material** | Attach photos of homework, screenshots, PDFs, notes and code — or a whole course folder. Images go straight to the model; documents are indexed in your **library**. The tutor works it agentically — `library_search` to find, `library_outline` to navigate a long PDF, `library_read` for exact text, and `library_view_page` to **screenshot a page and look at it** (figures, equations, tables, scans) — and cites it (`[L1]`, file + page). |
+| **Settings** | Pick the model from the composer (or ⌘, for everything): switch provider, browse the live OpenRouter catalog with tool/vision/reasoning badges and prices, set separate tutor, vision and research models, choose thinking effort (off → max), sampling (temperature, top-p/k, min-p, penalties, max tokens, seed — greyed out when the model doesn't accept them), agent step limits, web access on/off and OpenRouter routing. Saved per browser; API keys never leave the server. |
 | **Teaching modes** | *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
 
 ## How it works
@@ -76,7 +77,12 @@ Defaults on Groq: `openai/gpt-oss-120b` (tutor), `meta-llama/llama-4-scout-17b-1
 
 **OpenRouter:** set `TUTOR_PROVIDER=openrouter`, `OPENROUTER_API_KEY` and a `TUTOR_MODEL`, e.g.
 `deepseek/deepseek-v4.1-flash` (tool calling + image input, so one model covers tutor, vision and
-research). Any other OpenAI-compatible endpoint works via `OPENAI_COMPATIBLE_BASE_URL`.
+research). Any other OpenAI-compatible endpoint works via `OPENAI_COMPATIBLE_BASE_URL`
+(+ `OPENAI_COMPATIBLE_API_KEY`).
+
+Every provider whose key is in the environment shows up in **Settings → Providers**, and you can
+switch between them in the app; the `.env.local` values are just the defaults. Keys are only ever
+read from the server's environment.
 
 **Web search without keys:** the keyless `ddgs` metasearch needs a Python venv. If you already set
 it up for pi it is reused automatically; otherwise:
@@ -94,13 +100,16 @@ the agent loop, web search, images, maths and the board are all real. Click the 
 ## Keyboard
 
 `⌘K` command palette · `/` focus the message box · `Esc` stop the tutor · `Enter` send ·
-`Shift+Enter` new line. All Excalidraw shortcuts work on the board.
+`Shift+Enter` new line · `⌘,` settings. All Excalidraw shortcuts work on the board.
 
 ## Project layout
 
 ```
 src/app/api/chat/route.ts      two-stage pipeline (perception → agent), streamed to useChat
 src/app/api/image/route.ts     Wikimedia image proxy (for pinning images onto the canvas)
+src/app/api/models/route.ts    provider model catalogs (capabilities, parameters, prices)
+src/lib/agent/settings.ts      settings schema + defaults shared by browser and server
+src/components/settings/       settings dialog, model picker, composer model/effort controls
 src/lib/agent/                 agent, prompts, models, tool schemas, server tools, mock model
 src/lib/agent/web/             web search / fetch / research, ported from the pi setup
 src/lib/board/                 BoardController: animated drawing, layout, plots, snapshots

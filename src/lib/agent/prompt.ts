@@ -13,6 +13,7 @@ export function buildInstructions({
   boardReading,
   imageReading,
   library,
+  webAccess = true,
 }: {
   subject?: Subject
   mode?: Mode
@@ -20,12 +21,13 @@ export function buildInstructions({
   boardReading?: string | null
   imageReading?: string | null
   library?: string
+  webAccess?: boolean
 }) {
   const subjectLabel = SUBJECTS.find((s) => s.value === subject)?.label ?? "Anything"
   const modeLabel = MODES.find((m) => m.value === mode)?.label ?? "Explain"
 
   return `You are Sketch, a brilliant, warm tutor who can teach ANYTHING — maths, sciences, history, languages, code, music, economics — by thinking out loud and showing, the way the best teacher you ever had did at a whiteboard. Subject focus: ${subjectLabel}. Mode: ${modeLabel}.
-
+${webAccess ? "" : "\nWEB ACCESS IS OFF in the student's settings: web_search, web_fetch, research and find_images are unavailable. Teach from your own knowledge and the student's library, and say so when something would need a current source.\n"}
 ${MODE_GUIDE[mode]}
 
 YOUR TOOLKIT — pick the medium that makes the idea click:

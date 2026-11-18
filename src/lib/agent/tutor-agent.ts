@@ -4,9 +4,10 @@ import { isStepCount, ToolLoopAgent } from "ai"
 
 import { createLibraryTools } from "@/lib/context/tools"
 import { clientTools } from "./client-tools"
-import { getModel, modelId, usingGroq } from "./models"
+import { callSettings, getModel, modelId, usingGroq } from "./models"
 import { buildInstructions } from "./prompt"
 import { createServerTools } from "./server-tools"
+import type { TutorSettings } from "./settings"
 import type { Mode, Subject } from "./types"
 import { askVision, fromDataUrl } from "./vision"
 
@@ -15,7 +16,12 @@ import { askVision, fromDataUrl } from "./vision"
  * picture of the whiteboard (handwriting, sketches, the student's answer) and
  * reports it as text for the reasoning model.
  */
-export async function readBoard(snapshot: string, boardText: string | null | undefined, signal?: AbortSignal) {
+export async function readBoard(
+  snapshot: string,
+  boardText: string | null | undefined,
+  signal?: AbortSignal,
+  settings?: TutorSettings
+) {
   return askVision(
     [fromDataUrl(snapshot)],
     `You are the eyes of a tutor. This is the shared whiteboard. Element list for reference (S = student, T = tutor):
@@ -26,16 +32,18 @@ Describe what is on the board for the tutor, focusing on the STUDENT's work (S e
 - Describe sketches/diagrams and what they seem to represent; mention element ids where you can match them.
 - Point out anything that looks incorrect or unfinished.
 Be concise: bullet points, no preamble.`,
-    signal
+    signal,
+    settings
   )
 }
 
 /** Perception for photos/screenshots the student attached (when the tutor model can't see images). */
-export async function describeImages(images: string[], signal?: AbortSignal) {
+export async function describeImages(images: string[], signal?: AbortSignal, settings?: TutorSettings) {
   return askVision(
     images.map(fromDataUrl),
     `You are the eyes of a tutor. The student attached ${images.length > 1 ? "these images" : "this image"} (photo of homework, textbook page, diagram, screenshot…). For each image (number them), transcribe all text and maths exactly (LaTeX for maths) and describe any figures, graphs or diagrams precisely enough to teach from. Bullet points, no preamble.`,
-    signal
+    signal,
+    settings
   )
 }
 
@@ -54,19 +62,35 @@ export function createTutorAgent(opts: {
   libraryId: string | null
   snapshot: string | null
   images: string[]
+  settings: TutorSettings
 }) {
-  const id = modelId("tutor")
-  const reasoning = usingGroq() && /gpt-oss|qwen3|deepseek-r1/i.test(id)
+  const { settings } = opts
+  const call = callSettings(settings, "tutor")
+  // Groq's reasoning models default to medium effort unless the student picked a level.
+  const groqReasoningModel = usingGroq(settings) && /gpt-oss|qwen3|deepseek-r1/i.test(modelId("tutor", settings))
+  const groqDefaults =
+    groqReasoningModel && !call.reasoning && !call.providerOptions?.groq
+      ? { providerOptions: { groq: { reasoningEffort: "medium" } } }
+      : {}
+
+  const serverTools = createServerTools({ snapshot: opts.snapshot, images: opts.images, settings })
+  if (!settings.agent.webAccess) {
+    // No internet: drop web search, page fetching, research and image search.
+    for (const name of WEB_TOOLS) delete (serverTools as Record<string, unknown>)[name]
+  }
+
   return new ToolLoopAgent({
-    model: getModel("tutor"),
-    instructions: buildInstructions(opts),
+    ...groqDefaults,
+    ...call,
+    model: getModel("tutor", settings),
+    instructions: buildInstructions({ ...opts, webAccess: settings.agent.webAccess }),
     tools: {
       ...clientTools,
-      ...createServerTools({ snapshot: opts.snapshot, images: opts.images }),
-      ...createLibraryTools(opts.libraryId),
+      ...serverTools,
+      ...createLibraryTools(opts.libraryId, settings),
     },
-    stopWhen: isStepCount(16),
-    temperature: reasoning ? undefined : 0.4,
-    providerOptions: reasoning ? { groq: { reasoningEffort: "medium" } } : undefined,
+    stopWhen: isStepCount(settings.agent.maxSteps),
   })
 }
+
+const WEB_TOOLS = ["web_search", "web_fetch", "research", "find_images"]

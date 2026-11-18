@@ -197,6 +197,13 @@ export function MessageView({
           return <MediaPartView key={r} part={p} isLast={isLast && !busy} />
         })}
         {!live ? <SourcesFooter message={message} /> : null}
+        {!live && message.metadata?.model ? (
+          <span className="text-[11px] text-muted-foreground/70">
+            {message.metadata.model.split("/").at(-1)}
+            {message.metadata.effort && message.metadata.effort !== "provider-default" ? ` · ${message.metadata.effort} effort` : ""}
+            {message.metadata.provider ? ` · via ${message.metadata.provider}` : ""}
+          </span>
+        ) : null}
       </MessageContent>
     </Message>
   )

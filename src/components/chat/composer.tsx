@@ -37,6 +37,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group"
 import type { DraftAttachment, LibraryApi } from "@/lib/context/use-library"
+import { ModelControls } from "@/components/settings/model-controls"
+import type { SettingsApi } from "@/lib/settings/use-settings"
 import type { FilePickersHandle } from "./file-pickers"
 import { docIcon } from "./message"
 
@@ -118,6 +120,8 @@ export function Composer({
   onOpenLibrary,
   pickers,
   inputRef,
+  settings,
+  onOpenSettings,
 }: {
   library: LibraryApi
   busy: boolean
@@ -127,6 +131,8 @@ export function Composer({
   onOpenLibrary: () => void
   pickers: React.RefObject<FilePickersHandle | null>
   inputRef: React.RefObject<HTMLTextAreaElement | null>
+  settings?: SettingsApi
+  onOpenSettings?: () => void
 }) {
   const [text, setText] = React.useState("")
   const formRef = React.useRef<HTMLFormElement>(null)
@@ -203,9 +209,7 @@ export function Composer({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <span className="ml-1 hidden text-xs text-muted-foreground sm:inline">
-            Drop files, folders or paste screenshots
-          </span>
+          {settings ? <ModelControls api={settings} onOpenSettings={onOpenSettings ?? (() => {})} /> : null}
           {busy ? (
             <InputGroupButton size="icon-sm" variant="default" className="ml-auto rounded-full" aria-label="Stop" onClick={onStop}>
               <SquareIcon className="fill-current" />
