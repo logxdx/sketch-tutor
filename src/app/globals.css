@@ -214,3 +214,19 @@
 .sk-toast[data-swiping] {
   transition: none;
 }
+
+/* Narration: the sentence being read aloud, and the ones still to come in this step. */
+::highlight(narration-now) {
+  background-color: color-mix(in oklab, var(--tutor) 18%, transparent);
+  color: var(--foreground);
+}
+::highlight(narration-later) {
+  color: var(--muted-foreground);
+}
+@keyframes sk-nudge {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--tutor) 45%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--tutor) 0%, transparent); }
+}
+.sk-nudge {
+  animation: sk-nudge 1.6s ease-in-out infinite;
+}

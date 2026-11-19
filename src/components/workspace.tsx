@@ -26,6 +26,7 @@ import { toast } from "@ui-sdk/react/toast"
 
 import { ChatPanel } from "@/components/chat/chat-panel"
 import { TutorContext, type TutorActions } from "@/components/chat/tutor-context"
+import { PlayerBar } from "@/components/lesson/player-bar"
 import { LessonHistory } from "@/components/lessons/lesson-history"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { CommandPalette, type PaletteAction } from "@/components/ui-sdk/command-palette"
@@ -33,6 +34,8 @@ import { IconButton, PickList, Segmented, Toggle } from "@/components/ui-sdk/con
 import { derivePlan } from "@/lib/agent/plan"
 import { BOARD_SNAPSHOT_NAME, MODES, SUBJECTS, type Mode, type Subject, type TutorUIMessage } from "@/lib/agent/types"
 import { useLibrary } from "@/lib/context/use-library"
+import { useLessonPlayer } from "@/lib/lesson/use-lesson-player"
+import { useVoicePrefs } from "@/lib/voice/prefs"
 import type { LessonRecord } from "@/lib/lessons/types"
 import {
   currentLessonId,
@@ -186,10 +189,10 @@ export function Workspace() {
             run = b.annotate(input, id)
             break
           case "point_at":
-            run = b.pointAt(input)
+            run = b.pointAt(input, id)
             break
           case "erase":
-            run = b.erase(input)
+            run = b.erase(input, id)
             break
           default:
             run = b.askStudent(input, id)
@@ -219,8 +222,18 @@ export function Workspace() {
     busyRef.current = busy
   }, [busy])
 
+  // Step-by-step playback of the newest reply, read aloud (see useLessonPlayer).
+  const voicePrefs = useVoicePrefs()
+  const player = useLessonPlayer({ messages, streaming: busy, board, prefs: voicePrefs })
+  const finishPlayback = React.useRef(player.finish)
+  React.useEffect(() => {
+    finishPlayback.current = player.finish
+  }, [player.finish])
+
   const send = React.useCallback<TutorActions["send"]>(
     async (text, kind = "chat", extras) => {
+      // Moving on: whatever of the last reply is still waiting goes on the board now.
+      finishPlayback.current()
       const b = boardRef.current
       const s = b?.getStatus()
       const files: { type: "file"; mediaType: string; url: string; filename: string }[] = [...(extras?.files ?? [])]
@@ -253,6 +266,7 @@ export function Workspace() {
   )
 
   const stopAll = React.useCallback(() => {
+    finishPlayback.current()
     stop()
     boardRef.current?.cancel()
     setStatusLabel(null)
@@ -278,7 +292,8 @@ export function Workspace() {
   // ------------------------------------------------------------ the route
 
   // The route lives in the conversation (plan tool outputs); the board map follows it.
-  const plan = React.useMemo(() => derivePlan(messages), [messages])
+  // Paced: the route as of the step the student is on, so the map lights up with the lesson.
+  const plan = React.useMemo(() => derivePlan(player.visibleMessages), [player.visibleMessages])
   const planKey = plan ? JSON.stringify(plan) : ""
   React.useEffect(() => {
     if (board && plan) board.renderPlan(plan).catch(() => {})
@@ -360,6 +375,7 @@ export function Workspace() {
       saveTimer.current = null
       boardRef.current?.loadState(record.board)
       const restored = settleInterrupted(record.messages)
+      player.settle(restored)
       savedSigRef.current = conversationSignature(restored)
       setMessages(restored)
       if (SUBJECTS.some((s) => s.value === record.subject)) setSubject(record.subject as Subject)
@@ -371,7 +387,7 @@ export function Workspace() {
         restoringRef.current = false
       }, 800)
     },
-    [setMessages, setLessonId]
+    [setMessages, setLessonId, player.settle]
   )
 
   // On load: pick up where this browser left off.
@@ -523,6 +539,7 @@ export function Workspace() {
           setBoard(c)
         }}
       />
+      <PlayerBar player={player} prefs={voicePrefs} hasSelection={boardStatus.selection.length > 0} />
       {/* Live status of what the tutor is doing on the board. */}
       {boardStatus.activity ? (
         <div className="pointer-events-none absolute inset-x-0 top-16 z-10 flex justify-center">
@@ -577,7 +594,8 @@ export function Workspace() {
 
   const chatPane = (
     <ChatPanel
-      messages={messages}
+      messages={player.visibleMessages}
+      player={player}
       status={status}
       statusLabel={statusLabel}
       error={error}

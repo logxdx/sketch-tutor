@@ -20,6 +20,7 @@ it watch you draw and nudge you along.
 | **Settings** | Pick the model from the composer (or ⌘, for everything): switch provider, browse the live OpenRouter catalog with tool/vision/reasoning badges and prices, set separate tutor, vision and research models, choose thinking effort (off → max), sampling (temperature, top-p/k, min-p, penalties, max tokens, seed — greyed out when the model doesn't accept them), agent step limits, web access on/off and OpenRouter routing. Saved per browser; API keys never leave the server. |
 | **Learn mode** | Name a goal and Sketch first **measures** where your understanding ends (2–4 probe questions), then **maps a route** — a dependency map from what you know to the goal, drawn on the board and lit up as you go (green = understood, orange = now) — and **teaches it one step at a time**: predict, see it, check. Confident-but-wrong answers are treated as misconceptions and repaired before moving on; the route is redrawn when your answers surprise it. |
 | **Question cards** | Multiple choice (shuffled) or recall in your own words, with how sure you are, an optional *think out loud* box and *I don't know yet*. The tutor reads your reasoning, not just right/wrong. |
+| **Step-by-step lessons, read aloud** | Each reply plays as a lesson: one step at a time — a short narration and the drawing it describes, drawn while the narration is read, with the sentence being spoken highlighted. Move on with **Continue** (or →), or let it go on by itself. The tutor keeps writing ahead while you're on a step; its drawings wait, invisible, until their step. The voice is **Phonon 31m running on your CPU in the browser** (no server, no API key); without it, the system voice — or silent read-along where there is none. Settings → Voice. |
 | **Saved lessons** | Every lesson — conversation, board and route — is saved as you go and comes back on reload. The history (top left, or ⌘K) lists them by date with route progress; open, rename, delete or start a new one. Stored as plain JSON in `.data/lessons/`. |
 | **Teaching modes** | *Learn* (measure → route → teach), *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
 
@@ -96,6 +97,11 @@ uv venv .venv && uv pip install --python .venv/bin/python -r scripts/ddgs-requir
 
 Wikipedia is always available as the last fallback.
 
+**On-device voice:** `npm install phonon-tts` adds Gradium's Phonon 31m (the `xn-ptts` Rust
+runtime compiled to WebAssembly). `npm run dev` copies its browser files to `public/vendor/`; the
+~65 MB model downloads from Hugging Face the first time a lesson is read aloud and stays in the
+browser's cache. It runs on one CPU thread in a Web Worker — no GPU, no cross-origin isolation.
+
 **Try it without an API key:** `TUTOR_MOCK=1 npm run dev` swaps only the LLM for a scripted one —
 the agent loop, web search, images, maths and the board are all real. Click the starter prompts.
 ⌘K → *Play a demo lesson* runs the board tools with no model at all.
@@ -115,6 +121,9 @@ src/app/api/lessons/           saved lessons: list, load, save, rename, delete
 src/lib/agent/plan*.ts         the learning route: schema, validation, plan_lesson / plan_update tools
 src/lib/lessons/               lesson store (.data/lessons) and the browser hook
 src/components/lessons/        lesson history sheet
+src/lib/lesson/                lesson player: steps of a reply, pacing, playback
+src/lib/voice/                 narration: Phonon / system voice, sentences, highlighting
+src/components/lesson/         player bar (Continue, replay, voice)
 src/lib/agent/settings.ts      settings schema + defaults shared by browser and server
 src/components/settings/       settings dialog, model picker, composer model/effort controls
 src/lib/agent/                 agent, prompts, models, tool schemas, server tools, mock model

@@ -134,6 +134,21 @@ function fitLabel(s: DrawShape, width: number) {
 
 export type ToolResult = Record<string, unknown>
 
+/** A board tool call, laid out and ready to show. */
+type Prepared = {
+  /** Elements to reveal, in drawing order (an element with its bound text). */
+  groups: El[][]
+  /** Existing elements changed by it (arrow bindings). */
+  patches: El[]
+  result: ToolResult
+  /** Bookkeeping once it's on the board (outline step, open task…). */
+  after?: () => void
+  /** Custom animation instead of revealing `groups`. */
+  play?: () => Promise<void>
+  /** Instant version of `play`. */
+  reveal?: () => void
+}
+
 /**
  * Wraps the Excalidraw imperative API and turns the tutor's tool calls into
  * live, animated drawing. Also produces the text + image views of the board
@@ -699,35 +714,148 @@ export class BoardController {
     }
   }
 
+  // ------------------------------------------------- deferred (lesson player)
+
+  /**
+   * Off: board tools animate the moment they're called. On (step-by-step lessons): each call is
+   * laid out right away — invisible, so the tutor gets its ids and keeps going — and is drawn
+   * when the student reaches its step (`playPending`). Ids are the tool call ids.
+   */
+  private deferring = false
+  private pending = new Map<string, { label: string; play: () => Promise<void>; reveal: () => void }>()
+  /** Tool calls the player asked for before they were laid out: played (and resolved) on arrival. */
+  private wanted = new Map<string, { promise: Promise<void>; resolve: () => void }>()
+
+  private resolveWanted() {
+    for (const w of this.wanted.values()) w.resolve()
+    this.wanted.clear()
+  }
+
+  setDeferred(on: boolean) {
+    this.deferring = on
+  }
+
+  /** Has this tool call been laid out but not drawn yet? */
+  isPending(callId: string) {
+    return this.pending.has(callId)
+  }
+
+  /** Draw a laid-out tool call now (animated, in queue order). Resolves when it's on the board. */
+  playPending(callId: string): Promise<void> {
+    const p = this.pending.get(callId)
+    if (!p) {
+      let w = this.wanted.get(callId)
+      if (!w) {
+        let resolve!: () => void
+        const promise = new Promise<void>((r) => (resolve = r))
+        w = { promise, resolve }
+        this.wanted.set(callId, w)
+      }
+      return w.promise
+    }
+    this.pending.delete(callId)
+    return this.enqueue(p.label, p.play).catch(() => p.reveal())
+  }
+
+  /** Show everything still waiting, instantly (the student moved on, or the lesson is being saved). */
+  flushPending() {
+    for (const [id, p] of this.pending) {
+      this.pending.delete(id)
+      p.reveal()
+    }
+    this.resolveWanted()
+  }
+
+  private hidden(els: readonly El[]) {
+    return els.map((e) =>
+      newElementWith(e, { opacity: 0, locked: true, customData: { ...e.customData, pending: true } })
+    )
+  }
+
+  /**
+   * Run a board tool: lay it out (`prepare`), then animate it now — or, while deferring, place it
+   * invisibly and keep the animation for when its step plays.
+   */
+  private present(
+    label: string,
+    callId: string | undefined,
+    prepare: () => Promise<Prepared> | Prepared
+  ): Promise<ToolResult> {
+    if (!this.deferring || !callId) {
+      return this.enqueue(label, async () => {
+        const p = await prepare()
+        if (p.play) await p.play()
+        else if (p.groups.length) await this.animate(p.groups, p.patches)
+        p.after?.()
+        return p.result
+      })
+    }
+    return (async () => {
+      const p = await prepare()
+      if (p.result.ok === false) {
+        this.wanted.get(callId)?.resolve()
+        this.wanted.delete(callId)
+        return p.result
+      }
+      const els = p.groups.flat()
+      if (els.length || p.patches.length) this.upsert([...p.patches, ...this.hidden(els)])
+      this.pending.set(callId, {
+        label,
+        play: async () => {
+          if (p.play) await p.play()
+          else if (els.length) await this.animate(p.groups, [])
+          p.after?.()
+        },
+        reveal: () => {
+          if (p.reveal) p.reveal()
+          else if (els.length) this.upsert(els, CaptureUpdateAction.IMMEDIATELY)
+          p.after?.()
+        },
+      })
+      const w = this.wanted.get(callId)
+      if (w) {
+        this.wanted.delete(callId)
+        void this.playPending(callId).then(w.resolve)
+      }
+      return p.result
+    })()
+  }
+
   // --------------------------------------------------------- tool calls
 
   draw(input: DrawInput, stepId: string): Promise<ToolResult> {
-    return this.enqueue(`Drawing: ${input.title}`, async () => {
+    return this.present(`Drawing: ${input.title}`, stepId, () => {
       const warnings: string[] = []
       const { groups, all, existingPatches } = this.build(input.shapes, { ...input, step: stepId }, warnings)
-      if (!all.length) return { ok: false, error: "Nothing could be drawn.", warnings }
-      await this.animate(groups, existingPatches)
-      this.addStep({ id: stepId, title: input.title, kind: "draw", elementIds: all.map((e) => e.id) })
-      return { ok: true, ...this.summary(all), ...(warnings.length ? { warnings } : {}) }
+      if (!all.length) return { groups: [], patches: [], result: { ok: false, error: "Nothing could be drawn.", warnings } }
+      return {
+        groups,
+        patches: existingPatches,
+        after: () => this.addStep({ id: stepId, title: input.title, kind: "draw", elementIds: all.map((e) => e.id) }),
+        result: { ok: true, ...this.summary(all), ...(warnings.length ? { warnings } : {}) },
+      }
     })
   }
 
   plot(input: PlotToolInput, stepId: string): Promise<ToolResult> {
     const title = input.title ?? input.functions.map((f) => f.label ?? f.expr).join(", ")
-    return this.enqueue(`Plotting: ${title}`, async () => {
+    return this.present(`Plotting: ${title}`, stepId, async () => {
       const { shapes, warnings } = await plotToShapes(input)
       const { groups, all } = this.build(shapes, { near: input.near, step: stepId }, warnings)
-      await this.animate(groups, [])
-      this.addStep({ id: stepId, title: `Graph: ${title}`, kind: "plot", elementIds: all.map((e) => e.id) })
-      return { ok: true, ...this.summary(all), ...(warnings.length ? { warnings } : {}) }
+      return {
+        groups,
+        patches: [],
+        after: () => this.addStep({ id: stepId, title: `Graph: ${title}`, kind: "plot", elementIds: all.map((e) => e.id) }),
+        result: { ok: true, ...this.summary(all), ...(warnings.length ? { warnings } : {}) },
+      }
     })
   }
 
   annotate(input: AnnotateInput, stepId: string): Promise<ToolResult> {
-    return this.enqueue("Marking up the board", async () => {
+    return this.present("Marking up the board", stepId, () => {
       const targets = input.targets.map((t) => this.byId(t)).filter((e): e is El => !!e)
       const missing = input.targets.filter((t) => !this.byId(t))
-      if (!targets.length) return { ok: false, error: `Unknown ids: ${missing.join(", ")}` }
+      if (!targets.length) return { groups: [], patches: [], result: { ok: false, error: `Unknown ids: ${missing.join(", ")}` } }
       const b = union(targets.map((e) => this.box(e)))!
       const color: Color = input.color ?? (input.style === "check" ? "green" : input.style === "highlight" ? "orange" : "red")
       const shapes: DrawShape[] = []
@@ -771,11 +899,16 @@ export class BoardController {
       // Annotations use absolute scene coordinates: build at the origin and skip auto placement.
       const warnings: string[] = []
       const { groups, all } = this.buildAbsolute(shapes, stepId, warnings)
-      await this.animate(groups, [])
-      // Put highlights behind what they mark.
-      if (input.style === "highlight") this.sendToBack(all.map((e) => e.id))
-      this.addStep({ id: stepId, title: input.note ? `Note: ${input.note}` : `Marked ${input.style}`, kind: "annotate", elementIds: all.map((e) => e.id) })
-      return { ok: true, ...this.summary(all), ...(missing.length ? { warnings: [`Unknown ids: ${missing.join(", ")}`] } : {}) }
+      return {
+        groups,
+        patches: [],
+        after: () => {
+          // Put highlights behind what they mark.
+          if (input.style === "highlight") this.sendToBack(all.map((e) => e.id))
+          this.addStep({ id: stepId, title: input.note ? `Note: ${input.note}` : `Marked ${input.style}`, kind: "annotate", elementIds: all.map((e) => e.id) })
+        },
+        result: { ok: true, ...this.summary(all), ...(missing.length ? { warnings: [`Unknown ids: ${missing.join(", ")}`] } : {}) },
+      }
     })
   }
 
@@ -804,31 +937,34 @@ export class BoardController {
     })
   }
 
-  pointAt(input: PointAtInput): Promise<ToolResult> {
-    return this.enqueue("Pointing", async () => {
+  pointAt(input: PointAtInput, callId?: string): Promise<ToolResult> {
+    return this.present("Pointing", callId, () => {
       const targets = input.targets.map((t) => this.byId(t)).filter((e): e is El => !!e)
-      if (!targets.length) return { ok: false, error: `Unknown ids: ${input.targets.join(", ")}` }
-      this.scrollTo(targets)
-      const b = pad(union(targets.map((e) => this.box(e)))!, 18)
-      const c = center(b)
-      const start = { x: c.x + b.w / 2, y: c.y }
-      await this.moveCursor(start, { caption: input.caption })
-      const loops = this.status.speed === "instant" || pageHidden() ? 0 : 2
-      const steps = Math.round(36 * Math.max(0.5, SPEED[this.status.speed]))
-      for (let i = 0; i <= steps * loops && !this.cancelled; i++) {
-        const a = (i / steps) * Math.PI * 2
-        this.setCursor({ x: c.x + Math.cos(a) * (b.w / 2), y: c.y + Math.sin(a) * (b.h / 2) }, { laser: true, caption: input.caption })
-        await nextFrame()
+      if (!targets.length) return { groups: [], patches: [], result: { ok: false, error: `Unknown ids: ${input.targets.join(", ")}` } }
+      const play = async () => {
+        this.scrollTo(targets)
+        const b = pad(union(targets.map((e) => this.box(e)))!, 18)
+        const c = center(b)
+        const start = { x: c.x + b.w / 2, y: c.y }
+        await this.moveCursor(start, { caption: input.caption })
+        const loops = this.status.speed === "instant" || pageHidden() ? 0 : 2
+        const steps = Math.round(36 * Math.max(0.5, SPEED[this.status.speed]))
+        for (let i = 0; i <= steps * loops && !this.cancelled; i++) {
+          const a = (i / steps) * Math.PI * 2
+          this.setCursor({ x: c.x + Math.cos(a) * (b.w / 2), y: c.y + Math.sin(a) * (b.h / 2) }, { laser: true, caption: input.caption })
+          await nextFrame()
+        }
+        this.setCursor(start, { caption: input.caption })
+        this.cursorPos = start
+        await new Promise((r) => setTimeout(r, input.caption ? 1400 : 500))
       }
-      this.setCursor(start, { caption: input.caption })
-      this.cursorPos = start
-      await new Promise((r) => setTimeout(r, input.caption ? 1400 : 500))
-      return { ok: true }
+      // Pointing leaves nothing behind: skipped, it simply doesn't happen.
+      return { groups: [], patches: [], play, reveal: () => {}, result: { ok: true } }
     })
   }
 
-  erase(input: EraseInput): Promise<ToolResult> {
-    return this.enqueue("Erasing", async () => {
+  erase(input: EraseInput, callId?: string): Promise<ToolResult> {
+    return this.present("Erasing", callId, () => {
       const scene = this.live()
       const ids = new Set((input.ids ?? []).map((i) => this.aliases.get(i) ?? i))
       const route = this.routeIds()
@@ -838,20 +974,23 @@ export class BoardController {
         if (input.all) return !route.has(e.id)
         return ids.has(e.id) || ((e as ExcalidrawTextElement).containerId && ids.has((e as ExcalidrawTextElement).containerId!))
       })
-      if (!targets.length) return { ok: false, error: "Nothing of yours matched those ids." }
-      this.upsert(targets.map((e) => newElementWith(e, { isDeleted: true })), CaptureUpdateAction.IMMEDIATELY)
-      const gone = new Set(targets.map((e) => e.id))
-      this.patch({
-        steps: this.status.steps
-          .map((s) => ({ ...s, elementIds: s.elementIds.filter((id) => !gone.has(id)) }))
-          .filter((s) => s.elementIds.length),
-      })
-      return { ok: true, erased: targets.length }
+      if (!targets.length) return { groups: [], patches: [], result: { ok: false, error: "Nothing of yours matched those ids." } }
+      const erase = () => {
+        const gone = new Set(targets.map((e) => e.id))
+        const now = this.api.getSceneElementsIncludingDeleted().filter((e) => gone.has(e.id))
+        this.upsert(now.map((e) => newElementWith(e, { isDeleted: true })), CaptureUpdateAction.IMMEDIATELY)
+        this.patch({
+          steps: this.status.steps
+            .map((s) => ({ ...s, elementIds: s.elementIds.filter((id) => !gone.has(id)) }))
+            .filter((s) => s.elementIds.length),
+        })
+      }
+      return { groups: [], patches: [], play: async () => erase(), reveal: erase, result: { ok: true, erased: targets.length } }
     })
   }
 
   askStudent(input: AskStudentInput, stepId: string): Promise<ToolResult> {
-    return this.enqueue("Handing you the pen", async () => {
+    return this.present("Handing you the pen", stepId, () => {
       const w = input.width ?? 480
       const h = input.height ?? 300
       const warnings: string[] = []
@@ -866,15 +1005,20 @@ export class BoardController {
         { near: input.near, step: stepId },
         warnings
       )
-      await this.animate(groups, [])
       const frame = all.find((e) => e.type === "rectangle")!
-      this.addStep({ id: stepId, title: `Your turn: ${input.task}`, kind: "task", elementIds: all.map((e) => e.id) })
-      this.patch({ yourTurn: { frameId: frame.id, task: input.task }, studentDirty: false })
       return {
-        ok: true,
-        frame: this.summary([frame]).bounds,
-        frameId: frame.id,
-        note: "The student is now working. Stop and wait for their reply.",
+        groups,
+        patches: [],
+        after: () => {
+          this.addStep({ id: stepId, title: `Your turn: ${input.task}`, kind: "task", elementIds: all.map((e) => e.id) })
+          this.patch({ yourTurn: { frameId: frame.id, task: input.task }, studentDirty: false })
+        },
+        result: {
+          ok: true,
+          frame: this.summary([frame]).bounds,
+          frameId: frame.id,
+          note: "The student is now working. Stop and wait for their reply.",
+        },
       }
     })
   }
@@ -953,6 +1097,8 @@ export class BoardController {
 
   clearBoard() {
     this.cancel()
+    this.pending.clear()
+    this.resolveWanted()
     this.upsert(this.live().map((e) => newElementWith(e, { isDeleted: true })), CaptureUpdateAction.IMMEDIATELY)
     this.aliases.clear()
     this.patch({ steps: [], yourTurn: null, studentDirty: false })
@@ -1134,7 +1280,12 @@ export class BoardController {
 
   /** The board as plain JSON, to save with the lesson. */
   exportState(): BoardSnapshot {
-    const elements = this.live()
+    // Saved boards show everything: drawings still waiting for their step are stored as drawn.
+    const elements = this.live().map((e) =>
+      e.customData?.pending
+        ? newElementWith(e, { opacity: 100, locked: false, customData: { ...e.customData, pending: undefined } })
+        : e
+    )
     const used = new Set(elements.map((e) => (e as { fileId?: string }).fileId).filter(Boolean))
     const files = Object.fromEntries(Object.entries(this.api.getFiles()).filter(([id]) => used.has(id)))
     return {
@@ -1149,6 +1300,8 @@ export class BoardController {
   /** Replace the board with a saved one (or an empty board). Undo history starts fresh. */
   loadState(snap: BoardSnapshot | null) {
     this.cancel()
+    this.pending.clear()
+    this.resolveWanted()
     const elements = snap?.elements?.length
       ? restoreElements(snap.elements as Parameters<typeof restoreElements>[0], null, { repairBindings: true })
       : []

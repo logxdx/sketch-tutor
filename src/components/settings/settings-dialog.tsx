@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  AudioLinesIcon,
   BotIcon,
   BrainIcon,
   CircleAlertIcon,
@@ -24,6 +25,7 @@ import type { DrawSpeed } from "@/lib/board/types"
 import type { SettingsApi } from "@/lib/settings/use-settings"
 import { cn } from "@/lib/utils"
 import { CapabilityBadges, ModelPicker } from "./model-picker"
+import { VoicePanel } from "./voice-panel"
 
 type Role = "tutor" | "vision" | "research"
 
@@ -209,6 +211,7 @@ export function SettingsDialog({
               { value: "thinking", label: "Thinking", icon: <BrainIcon /> },
               { value: "sampling", label: "Sampling", icon: <SlidersHorizontalIcon /> },
               { value: "agent", label: "Agent", icon: <BotIcon /> },
+              { value: "voice", label: "Voice", icon: <AudioLinesIcon /> },
               { value: "providers", label: "Providers", icon: <CircleCheckIcon /> },
             ].map((t) => (
               <TabsTab
@@ -434,6 +437,11 @@ export function SettingsDialog({
                   ]}
                 />
               </Section>
+            </TabsPanel>
+
+            {/* ------------------------------------------------ Voice */}
+            <TabsPanel value="voice" className="outline-none">
+              <VoicePanel />
             </TabsPanel>
 
             {/* ------------------------------------------------ Providers */}

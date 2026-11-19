@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  ArrowRightIcon,
   BoxIcon,
   CheckCheckIcon,
   FileUpIcon,
@@ -46,6 +47,7 @@ import { Composer } from "./composer"
 import { FilePickers, type FilePickersHandle } from "./file-pickers"
 import { LibraryPanel } from "./library-panel"
 import { MessageView } from "./message"
+import type { LessonPlayer } from "@/lib/lesson/use-lesson-player"
 import { useTutor } from "./tutor-context"
 
 const STARTERS = [
@@ -254,6 +256,7 @@ export function ChatPanel({
   settings,
   onOpenSettings,
   onStartLearning,
+  player,
 }: {
   messages: TutorUIMessage[]
   status: "submitted" | "streaming" | "ready" | "error"
@@ -266,6 +269,8 @@ export function ChatPanel({
   settings: SettingsApi
   onOpenSettings: () => void
   onStartLearning: (goal: string) => void
+  /** Step-by-step playback of the newest reply. */
+  player?: LessonPlayer
 }) {
   const { send } = useTutor()
   const [view, setView] = React.useState<View>("lesson")
@@ -277,7 +282,9 @@ export function ChatPanel({
 
   useShortcut("/", () => inputRef.current?.focus(), { description: "Focus the message box" })
 
-  const statusText = board.activity ?? (busy ? (statusLabel ?? "Thinking…") : null)
+  // While the student is still behind the tutor's latest step, there's nothing to wait for.
+  const ahead = !!player?.active && player.hasNext
+  const statusText = board.activity ?? (busy && !ahead ? (statusLabel ?? "Thinking…") : null)
 
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -354,9 +361,34 @@ export function ChatPanel({
                 <MessageScrollerContent className="mx-auto max-w-2xl px-4 py-5" aria-busy={status === "streaming"}>
                   {messages.map((m, i) => (
                     <MessageScrollerItem key={m.id} messageId={m.id} scrollAnchor={m.role === "user"}>
-                      <MessageView message={m} isLast={i === messages.length - 1} busy={busy} />
+                      <MessageView
+                        message={m}
+                        isLast={i === messages.length - 1}
+                        busy={busy}
+                        partial={!!player?.active && m.id === player.pacedId && player.hasNext}
+                      />
                     </MessageScrollerItem>
                   ))}
+                  {player?.active && (player.hasNext || player.waitingForNext) ? (
+                    <MessageScrollerItem messageId="continue">
+                      <div className="flex items-center gap-2 pl-11">
+                        <Button
+                          size="sm"
+                          className={cn("rounded-full", player.done && "sk-nudge")}
+                          onClick={player.next}
+                          disabled={player.waitingForNext}
+                        >
+                          {player.waitingForNext ? <Loader2Icon className="animate-spin" /> : null}
+                          Continue
+                          <ArrowRightIcon />
+                        </Button>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          Step {player.index + 1} of {player.count}
+                          {player.streaming ? "…" : ""}
+                        </span>
+                      </div>
+                    </MessageScrollerItem>
+                  ) : null}
                   {statusText ? (
                     <MessageScrollerItem messageId="status">
                       <Marker aria-live="polite" className="pl-10">

@@ -18,6 +18,7 @@ import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Message, MessageAvatar, MessageContent } from "@/components/ui/message"
 import { BOARD_SNAPSHOT_NAME, type TutorUIMessage } from "@/lib/agent/types"
 import { formatBytes } from "@/lib/context/client"
+import { narrationAttr } from "@/lib/lesson/use-lesson-player"
 import type { DocKind, MessageAttachment } from "@/lib/context/types"
 import { SourcesFooter } from "./sources"
 import { MEDIA_TOOLS, MediaPartView } from "./tool-cards"
@@ -108,10 +109,13 @@ export function MessageView({
   message,
   isLast,
   busy,
+  partial = false,
 }: {
   message: TutorUIMessage
   isLast: boolean
   busy: boolean
+  /** Only some of its steps are shown yet (lesson player): no sources/model footer until the end. */
+  partial?: boolean
 }) {
   if (message.role === "user") {
     const text = message.parts
@@ -179,14 +183,12 @@ export function MessageView({
           if (run.kind === "text") {
             return run.parts.map((p, i) =>
               p.type === "text" ? (
-                <Streamdown
-                  key={`${r}-${i}`}
-                  plugins={plugins}
-                  className="prose-chat text-sm leading-relaxed"
-                  isAnimating={live && p === lastPart}
-                >
-                  {p.text}
-                </Streamdown>
+                // The lesson player reads and highlights narration through this attribute.
+                <div key={`${r}-${i}`} data-narration={narrationAttr(message.id, message.parts.indexOf(p))}>
+                  <Streamdown plugins={plugins} className="prose-chat text-sm leading-relaxed" isAnimating={live && p === lastPart}>
+                    {p.text}
+                  </Streamdown>
+                </div>
               ) : null
             )
           }
@@ -197,8 +199,8 @@ export function MessageView({
           }
           return <MediaPartView key={r} part={p} isLast={isLast && !busy} />
         })}
-        {!live ? <SourcesFooter message={message} /> : null}
-        {!live && message.metadata?.model ? (
+        {!live && !partial ? <SourcesFooter message={message} /> : null}
+        {!live && !partial && message.metadata?.model ? (
           <span className="text-[11px] text-muted-foreground/70">
             {message.metadata.model.split("/").at(-1)}
             {message.metadata.effort && message.metadata.effort !== "provider-default" ? ` · ${message.metadata.effort} effort` : ""}

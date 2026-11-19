@@ -16,6 +16,8 @@ next-env.d.ts
 .vercel
 npm-debug.log*
 .DS_Store
+# copied from node_modules by scripts/vendor-phonon.mjs
+public/vendor
 
 # student context library (local data)
 .data
