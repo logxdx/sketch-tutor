@@ -7,6 +7,7 @@ import { Slider, SliderControl, SliderIndicator, SliderThumb, SliderTrack } from
 import { Segmented, Toggle } from "@/components/ui-sdk/controls"
 import { Button } from "@/components/ui/button"
 import { loadPhonon, phononStatus, pickEngine, type EngineId } from "@/lib/voice/engines"
+import { listenStatus, loadParakeet, MODEL_MB } from "@/lib/voice/listen"
 import { setVoicePrefs, useVoicePrefs } from "@/lib/voice/prefs"
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
@@ -43,6 +44,32 @@ function PhononState() {
         <div className="flex items-center gap-2">
           <p className="text-xs text-muted-foreground">Downloads ~65 MB the first time a lesson is read aloud.</p>
           <Button size="xs" variant="outline" onClick={() => void loadPhonon()}>
+            Download now
+          </Button>
+        </div>
+      )
+  }
+}
+
+function ListenState() {
+  const s = React.useSyncExternalStore(listenStatus.subscribe, listenStatus.get, listenStatus.get)
+  switch (s.state) {
+    case "ready":
+      return <p className="text-xs text-muted-foreground">Ready on this device · CPU, 1 thread ({s.build})</p>
+    case "loading":
+      return (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2Icon className="size-3 animate-spin" />
+          {s.fromCache ? "Loading from this browser" : "Downloading the speech model"}… {Math.round(s.progress * 100)}%
+        </p>
+      )
+    case "unavailable":
+      return <p className="text-xs text-pretty text-amber-700 dark:text-amber-400">{s.reason}</p>
+    default:
+      return (
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-muted-foreground">Downloads ~{MODEL_MB} MB the first time you use the mic.</p>
+          <Button size="xs" variant="outline" onClick={() => void loadParakeet()}>
             Download now
           </Button>
         </div>
@@ -128,6 +155,17 @@ export function VoicePanel() {
         <Button size="sm" variant="outline" onClick={test} disabled={testing}>
           {testing ? <Loader2Icon className="animate-spin" /> : <PlayIcon />} Test the voice
         </Button>
+      </Section>
+
+      <Section
+        title="Talking to Sketch"
+        description="The mic in the message box: what you say is transcribed on your device while you talk — nothing is sent anywhere until you send the message. Narration pauses while you speak."
+      >
+        <ListenState />
+        <p className="text-[11px] text-pretty text-muted-foreground">
+          Speech recognition: Moondream&apos;s Parakeet Redux (1.58-bit, from NVIDIA&apos;s parakeet-tdt-0.6b-v3, CC BY 4.0), run with
+          fusor-rs/parakeet-redux-wasm (MIT).
+        </p>
       </Section>
     </div>
   )

@@ -21,7 +21,7 @@ it watch you draw and nudge you along.
 | **Settings** | Pick the model from the composer (or ⌘, for everything): switch provider, browse the live OpenRouter catalog with tool/vision/reasoning badges and prices, set separate tutor, vision and research models, choose thinking effort (off → max), sampling (temperature, top-p/k, min-p, penalties, max tokens, seed — greyed out when the model doesn't accept them), agent step limits, web access on/off and OpenRouter routing. Saved per browser; API keys never leave the server. |
 | **Learn mode** | Name a goal and Sketch first **measures** where your understanding ends (2–4 probe questions), then **maps a route** — a dependency map from what you know to the goal, drawn on the board and lit up as you go (green = understood, orange = now) — and **teaches it one step at a time**: predict, see it, check. Confident-but-wrong answers are treated as misconceptions and repaired before moving on; the route is redrawn when your answers surprise it. |
 | **Question cards** | Multiple choice (shuffled) or recall in your own words, with how sure you are, an optional *think out loud* box and *I don't know yet*. The tutor reads your reasoning, not just right/wrong. |
-| **Step-by-step lessons, read aloud** | Each reply plays as a lesson: one step at a time — a short narration and the drawing it describes, drawn while the narration is read, with the sentence being spoken highlighted. Move on with **Continue** (or →), or let it go on by itself. The tutor keeps writing ahead while you're on a step; its drawings wait, invisible, until their step. The voice is **Phonon 31m running on your CPU in the browser** (no server, no API key); without it, the system voice — or silent read-along where there is none. Settings → Voice. |
+| **Step-by-step lessons, read aloud** | Each reply plays as a lesson: one step at a time — a short narration and the drawing it describes, drawn while the narration is read, with the sentence being spoken highlighted. Move on with **Continue** (or →), or let it go on by itself. The tutor keeps writing ahead while you're on a step; its drawings wait, invisible, until their step. The voice is **Phonon 31m running on your CPU in the browser** (no server, no API key); without it, the system voice — or silent read-along where there is none. You can **talk back** too: the mic transcribes on your device as you speak. Settings → Voice. |
 | **Saved lessons** | Every lesson — conversation, board and route — is saved as you go and comes back on reload. The history (top left, or ⌘K) lists them by date with route progress; open, rename, delete or start a new one. Stored as plain JSON in `.data/lessons/`. |
 | **Teaching modes** | *Learn* (measure → route → teach), *Explain* (tutor leads), *Guide* (Socratic), *Quiz* (practice + marking), any subject. |
 
@@ -102,6 +102,14 @@ Wikipedia is always available as the last fallback.
 runtime compiled to WebAssembly). `npm run dev` copies its browser files to `public/vendor/`; the
 ~65 MB model downloads from Hugging Face the first time a lesson is read aloud and stays in the
 browser's cache. It runs on one CPU thread in a Web Worker — no GPU, no cross-origin isolation.
+
+**Talking to Sketch:** the mic in the message box transcribes on your device with Moondream's
+Parakeet Redux (a 1.58-bit Parakeet v3, CC BY 4.0) run by
+[fusor-rs/parakeet-redux-wasm](https://github.com/fusor-rs/parakeet-redux-wasm) (MIT). `npm run dev`
+fetches its single-threaded runtime (~1.7 MB, pinned commit, SHA-256 checked) into
+`public/vendor/parakeet`; the ~199 MB model streams from Hugging Face the first time you use the mic
+(you can talk while it loads) and is kept in the browser's private storage. Text appears while you
+speak; Enter sends, the mic button stops so you can edit. Narration pauses while you talk.
 
 **Try it without an API key:** `TUTOR_MOCK=1 npm run dev` swaps only the LLM for a scripted one —
 the agent loop, web search, images, maths and the board are all real. Click the starter prompts.
