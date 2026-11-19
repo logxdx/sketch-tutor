@@ -24,9 +24,10 @@ mkdirSync(dest, { recursive: true })
 // Phonon on one thread). No threaded builds, type declarations, docs or tests.
 const skip = (p) =>
   p.startsWith(join(src, "node_modules")) ||
-  /[\\/](test|tests|www|examples)([\\/]|$)/.test(p.slice(src.length)) ||
-  /threads[^\\/]*\.wasm$/i.test(p) ||
-  /\.(d\.ts|map|md)$/i.test(p)
+  // wasm-threads/ is only import()ed when threads > 1.
+  /[\\/](test|tests|www|examples|wasm-threads)([\\/]|$)/.test(p.slice(src.length)) ||
+  /\.(d\.ts|map)$/i.test(p) ||
+  /README\.md$/i.test(p) // licences (incl. THIRD_PARTY_LICENSES.md for the compiled crates) stay
 cpSync(src, dest, { recursive: true, filter: (p) => !skip(p) })
 writeFileSync(stamp, version)
 console.log(`[phonon] phonon-tts ${version} → public/vendor/phonon-tts`)
