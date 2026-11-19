@@ -45,6 +45,82 @@ export const drawInput = z.object({
   near: z.string().optional().describe("Id of a board element to place this panel next to."),
 })
 
+// ------------------------------------------------- board components
+
+/**
+ * Ready-made board components: the tutor gives the content, the board lays it out (measured
+ * text, no overlaps), so structured visuals need no coordinates — like a UI component catalog.
+ */
+const label = z.string().describe("Short; wraps automatically.")
+export const blockSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("heading"), text: label }),
+  z.object({ type: z.literal("text"), text: z.string().describe("A sentence or two."), color }),
+  z.object({ type: z.literal("bullets"), items: z.array(label).min(1).max(8), color }),
+  z.object({
+    type: z.literal("steps"),
+    items: z.array(label).min(2).max(8).describe("A process in order, drawn as boxes joined by arrows."),
+    direction: z.enum(["right", "down"]).optional(),
+    color,
+  }),
+  z.object({
+    type: z.literal("flow"),
+    nodes: z.array(z.object({ id: z.string(), label, color })).min(2).max(12),
+    edges: z.array(z.object({ from: z.string(), to: z.string(), label: z.string().optional() })).max(20),
+    direction: z.enum(["right", "down"]).optional(),
+  }).describe("A flowchart / concept map: laid out in layers from the edges."),
+  z.object({
+    type: z.literal("cycle"),
+    items: z.array(label).min(3).max(8).describe("Stages that loop back to the start."),
+    center: z.string().optional().describe("Label in the middle."),
+    color,
+  }),
+  z.object({
+    type: z.literal("compare"),
+    columns: z.array(z.object({ title: label, items: z.array(label).max(8), color })).min(2).max(4),
+  }).describe("Side-by-side columns: pros/cons, before/after, A vs B."),
+  z.object({
+    type: z.literal("table"),
+    headers: z.array(z.string()).min(1).max(6),
+    rows: z.array(z.array(z.string())).min(1).max(10),
+  }),
+  z.object({
+    type: z.literal("timeline"),
+    events: z.array(z.object({ when: z.string(), label })).min(2).max(10),
+  }),
+  z.object({
+    type: z.literal("equation"),
+    lines: z
+      .array(z.object({ math: z.string().describe("Plain Unicode maths, e.g. 2x + 3 = 11."), note: z.string().optional() }))
+      .min(1)
+      .max(8),
+  }).describe("Worked steps of a calculation, one per line, with optional notes."),
+  z.object({
+    type: z.literal("callout"),
+    text: z.string(),
+    tone: z.enum(["key", "tip", "warning"]).optional(),
+  }).describe("A boxed key idea, tip or common mistake."),
+  z.object({
+    type: z.literal("tree"),
+    root: label,
+    children: z.array(z.object({ label, children: z.array(label).max(6).optional() })).min(1).max(6),
+  }).describe("A hierarchy / classification (two levels)."),
+  z.object({
+    type: z.literal("number_line"),
+    min: z.number(),
+    max: z.number(),
+    step: z.number().optional(),
+    marks: z.array(z.object({ at: z.number(), label: z.string().optional(), color })).max(10).optional(),
+  }),
+])
+
+export const composeInput = z.object({
+  title: z.string().describe("Short title for this step, shown in the lesson outline."),
+  blocks: z.array(blockSchema).min(1).max(6).describe("Stacked top to bottom."),
+  width: z.number().optional().describe("Panel width in px (default 640)."),
+  placement: z.enum(["below", "right"]).optional(),
+  near: z.string().optional().describe("Id of a board element to place this panel next to."),
+})
+
 export const plotInput = z.object({
   title: z.string().optional(),
   functions: z

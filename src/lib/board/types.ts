@@ -3,6 +3,8 @@ import type { z } from "zod"
 import type {
   annotateInput,
   askStudentInput,
+  blockSchema,
+  composeInput,
   drawInput,
   eraseInput,
   plotInput,
@@ -16,6 +18,8 @@ export type PointAtInput = z.infer<typeof pointAtInput>
 export type PlotToolInput = z.infer<typeof plotInput>
 export type EraseInput = z.infer<typeof eraseInput>
 export type AskStudentInput = z.infer<typeof askStudentInput>
+export type ComposeInput = z.infer<typeof composeInput>
+export type Block = z.infer<typeof blockSchema>
 
 export type DrawSpeed = "relaxed" | "normal" | "fast" | "instant"
 

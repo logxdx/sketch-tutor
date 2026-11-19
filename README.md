@@ -11,6 +11,7 @@ it watch you draw and nudge you along.
 | | |
 |---|---|
 | **Live whiteboard** | Embedded [Excalidraw](https://github.com/excalidraw/excalidraw). The tutor draws labelled diagrams, flows and timelines, graphs functions, circles/ticks/crosses your work, and laser-points with its cursor. Everything stays editable. |
+| **Board components** | A catalog the tutor fills with content instead of coordinates — steps, flowcharts, cycles, comparisons, tables, timelines, worked equations, callouts, hierarchies, number lines (`compose`). The board lays them out with measured text; free-form `draw` panels reflow too, so wrapped labels never overlap. |
 | **Collaboration** | Select elements → *Ask Sketch about this*. *Your turn* frames hand you the pen; *Check my work* sends a snapshot and gets your work marked on the board. *Watch me draw* gives short feedback whenever you pause. |
 | **3D** | Interactive three.js scenes (molecules, orbits, vectors, solids, surfaces `y=f(x,z)`, parametric curves) — orbit, zoom, expand. |
 | **Graphs & data** | Hand-drawn function plots on the board; slider explorers for `y = f(x, params)`; bar/line/area/scatter charts with tooltips and a table view. |

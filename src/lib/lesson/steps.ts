@@ -7,7 +7,7 @@
  */
 
 /** Board tools: laid out invisibly while the tutor writes, drawn when their step plays. */
-export const BOARD_TOOLS = new Set(["draw", "plot", "annotate", "point_at", "erase", "ask_student"])
+export const BOARD_TOOLS = new Set(["draw", "compose", "plot", "annotate", "point_at", "erase", "ask_student"])
 
 /** Tools whose output is something to look at or do (the rest is the tutor's own working). */
 const VISUAL_TOOLS = new Set([...BOARD_TOOLS, "show_3d", "chart", "explore", "find_images", "quiz", "plan_lesson"])

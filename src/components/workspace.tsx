@@ -67,7 +67,7 @@ function conversationSignature(messages: TutorUIMessage[]) {
   return `${messages.length}:${last.id}:${last.parts.length}:${tail ? JSON.stringify(tail).length : 0}`
 }
 
-const BOARD_TOOLS = new Set(["draw", "plot", "annotate", "point_at", "erase", "ask_student"])
+const BOARD_TOOLS = new Set(["draw", "compose", "plot", "annotate", "point_at", "erase", "ask_student"])
 const WATCH_IDLE_MS = 3500
 
 function useIsNarrow() {
@@ -181,6 +181,9 @@ export function Workspace() {
         switch (toolCall.toolName) {
           case "draw":
             run = b.draw(input, id)
+            break
+          case "compose":
+            run = b.compose(input, id)
             break
           case "plot":
             run = b.plot(input, id)

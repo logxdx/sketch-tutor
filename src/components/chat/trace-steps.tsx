@@ -56,6 +56,7 @@ export type ReasoningPart = Extract<Part, { type: "reasoning" }>
 /** Tools rendered as Trace lines (process), as opposed to rich cards (media). */
 export const STEP_TOOLS = new Set([
   "draw",
+  "compose",
   "plot",
   "annotate",
   "point_at",
@@ -75,7 +76,7 @@ export const STEP_TOOLS = new Set([
 ])
 
 /** Tools the browser executes (still running while the board animates, after the stream ends). */
-const CLIENT_TOOLS = new Set(["draw", "plot", "annotate", "point_at", "erase", "ask_student"])
+const CLIENT_TOOLS = new Set(["draw", "compose", "plot", "annotate", "point_at", "erase", "ask_student"])
 
 /**
  * AI SDK tool state → Trace line status (shadcn Tool pattern): running while
@@ -111,6 +112,7 @@ const STEP: Record<
   { icon: React.ReactNode; running: (i: Input) => string; done: (i: Input, o: unknown) => string }
 > = {
   draw: { icon: <PenLineIcon />, running: (i) => `Drawing ${i?.title ?? ""}`, done: (i) => `Drew ${i?.title ?? "on the board"}` },
+  compose: { icon: <PenLineIcon />, running: (i) => `Drawing ${i?.title ?? ""}`, done: (i) => `Drew ${i?.title ?? "on the board"}` },
   plot: {
     icon: <LineChartIcon />,
     running: () => "Graphing on the board",

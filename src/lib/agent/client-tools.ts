@@ -3,6 +3,7 @@ import { tool } from "ai"
 import {
   annotateInput,
   askStudentInput,
+  composeInput,
   drawInput,
   eraseInput,
   plotInput,
@@ -21,6 +22,11 @@ export const clientTools = {
     description:
       "Draw a small visual panel on the shared whiteboard — labelled diagrams, flows, cycles, timelines, tables made of boxes, worked equations. It is animated live, stroke by stroke, with your cursor while the student watches. Coordinates are LOCAL to the panel (0,0 = top-left); the board places the panel in free space. One idea per panel; prefer several small panels over one huge one.",
     inputSchema: drawInput,
+  }),
+  compose: tool({
+    description:
+      "Put a ready-made visual on the whiteboard from CONTENT alone — the board lays it out, measures the text and keeps everything apart, so you never compute coordinates. Blocks (stacked in one panel): heading, text, bullets, steps (a process as boxes with arrows), flow (a flowchart / concept map from nodes + edges), cycle (stages that loop), compare (side-by-side columns), table, timeline, equation (worked lines with notes), callout (key idea / tip / warning), tree (a two-level hierarchy), number_line. Animated live like draw; returns the element ids (flow nodes keep your ids) for annotate / point_at.",
+    inputSchema: composeInput,
   }),
   plot: tool({
     description:

@@ -34,12 +34,15 @@ import {
   union,
   wrapText,
 } from "./geometry"
+import { textHeight, wrapToWidth } from "./text-metrics"
+import { layoutBlocks } from "./blocks"
 import { plotToShapes } from "./plot"
 import type {
   AnnotateInput,
   AskStudentInput,
   BoardSnapshot,
   BoardStatus,
+  ComposeInput,
   DrawInput,
   DrawShape,
   DrawSpeed,
@@ -130,6 +133,63 @@ function fitLabel(s: DrawShape, width: number) {
   const needed = Math.ceil((longest * fitted * 0.62 + 24) * factor)
   const newWidth = Math.max(width, needed)
   return { width: newWidth, fontSize: fitted, dx: -(newWidth - width) / 2 }
+}
+
+type Rect = { x: number; y: number; w: number; h: number }
+
+/**
+ * Keep a panel from overlapping itself after its labels wrap. The tutor places things expecting
+ * each label to be as tall as it wrote it; wrapping makes some taller. Anything that started
+ * below a label (and now overlaps it) moves down, and boxes that contained it grow — like text
+ * reflowing in a page. Things the tutor deliberately overlapped (a label inside a box, a
+ * highlight behind text) aren't touched.
+ */
+function reflow(els: El[], intendedTextHeight: Map<string, number>): El[] {
+  const GAP = 14
+  const isBound = (e: El) => e.type === "text" && !!(e as ExcalidrawTextElement).containerId
+  const mains = els.filter((e) => !isBound(e) && e.type !== "arrow" && e.type !== "line")
+  if (mains.length < 2) return els
+  const orig = new Map<string, Rect>(mains.map((e) => [e.id, { x: e.x, y: e.y, w: e.width, h: e.height }]))
+  const cur = new Map<string, Rect>(mains.map((e) => [e.id, { x: e.x, y: e.y, w: e.width, h: e.height }]))
+  const intendedBottom = (e: El) => orig.get(e.id)!.y + (intendedTextHeight.get(e.id) ?? orig.get(e.id)!.h)
+  const across = (a: Rect, b: Rect) => a.x < b.x + b.w - 4 && b.x < a.x + a.w - 4
+  const inside = (o: Rect, bottom: number, k: Rect) =>
+    o.x >= k.x - 4 && o.x + o.w <= k.x + k.w + 4 && o.y >= k.y - 4 && bottom <= k.y + k.h + 4
+  const sorted = [...mains].sort((a, b) => orig.get(a.id)!.y - orig.get(b.id)!.y || orig.get(a.id)!.x - orig.get(b.id)!.x)
+
+  sorted.forEach((e, i) => {
+    const o = orig.get(e.id)!
+    const c = cur.get(e.id)!
+    // Pushed down by anything above it that it now overlaps.
+    for (const p of sorted.slice(0, i)) {
+      const po = orig.get(p.id)!
+      const pc = cur.get(p.id)!
+      if (!across(po, o) || o.y < intendedBottom(p) - 6) continue
+      if (pc.y + pc.h > c.y + 2) c.y = pc.y + pc.h + GAP
+    }
+    // Boxes it was drawn inside grow to keep it inside.
+    for (const k of sorted.slice(0, i)) {
+      if (k.type === "text") continue
+      const ko = orig.get(k.id)!
+      const kc = cur.get(k.id)!
+      if (inside(o, intendedBottom(e), ko) && c.y + c.h + 12 > kc.y + kc.h) kc.h = c.y + c.h + 12 - kc.y
+    }
+  })
+
+  const moved = new Map<string, Rect>()
+  for (const e of mains) {
+    const o = orig.get(e.id)!
+    const c = cur.get(e.id)!
+    if (c.y !== o.y || c.h !== o.h) moved.set(e.id, c)
+  }
+  if (!moved.size) return els
+  return els.map((e) => {
+    const m = moved.get(e.id)
+    if (m) return newElementWith(e, e.type === "text" ? { y: m.y } : { y: m.y, height: m.h })
+    const container = isBound(e) ? moved.get((e as ExcalidrawTextElement).containerId!) : undefined
+    // A label stays centred in its (moved or grown) box.
+    return container ? newElementWith(e, { y: container.y + (container.h - e.height) / 2 }) : e
+  })
 }
 
 export type ToolResult = Record<string, unknown>
@@ -488,6 +548,8 @@ export class BoardController {
     // Pass 1: shapes and text (so arrows can measure what they connect).
     const order: { shape: DrawShape; id: string }[] = []
     const solid: ExcalidrawElementSkeleton[] = []
+    /** Text boxes: their width, and how tall the tutor expected them (before wrapping). */
+    const textBoxes = new Map<string, { width: number; intended: number; original: string }>()
     let autoY = 0
     for (const s of shapes) {
       const id = this.uniqueId(s.id)
@@ -497,8 +559,10 @@ export class BoardController {
       const y = oy + (s.y ?? autoY)
       if (s.kind === "text") {
         const fontSize = FONT_SIZE[s.size ?? "m"]
-        const maxChars = Math.max(12, Math.floor((s.w ?? 520) / (fontSize * 0.55)))
-        const text = wrapText(s.text ?? "", maxChars)
+        const width = s.w ?? 520
+        const original = s.text ?? ""
+        const text = wrapToWidth(original, width, fontSize)
+        textBoxes.set(id, { width, intended: textHeight(original.split("\n").length, fontSize), original })
         solid.push({
           type: "text",
           id,
@@ -509,7 +573,7 @@ export class BoardController {
           fontFamily: FONT_FAMILY.Excalifont,
           ...common(s),
         } as ExcalidrawElementSkeleton)
-        autoY = (s.y ?? autoY) + fontSize * 1.4 * text.split("\n").length + 16
+        autoY = (s.y ?? autoY) + textHeight(text.split("\n").length, fontSize) + 16
       } else {
         const type = s.kind === "rect" ? "rectangle" : s.kind
         const fit = fitLabel(s, s.w ?? 160)
@@ -536,7 +600,19 @@ export class BoardController {
         autoY = (s.y ?? autoY) + (s.h ?? 70) + 24
       }
     }
-    const solidEls: El[] = solid.length ? convertToExcalidrawElements(solid, { regenerateIds: false }) : []
+    const converted: El[] = solid.length ? convertToExcalidrawElements(solid, { regenerateIds: false }) : []
+    // Excalidraw text boxes: fixed width, wrapping natively if the student resizes them later.
+    const boxed = converted.map((e) => {
+      const t = textBoxes.get(e.id)
+      return t
+        ? newElementWith(e as ExcalidrawTextElement, {
+            autoResize: false,
+            width: Math.max(e.width, Math.min(t.width, e.width + 24)),
+            originalText: t.original,
+          } as Partial<ExcalidrawTextElement>)
+        : e
+    })
+    const solidEls = reflow(boxed, new Map([...textBoxes].map(([id, t]) => [id, t.intended])))
     const newById = new Map<string, El>(solidEls.map((e) => [e.id, e]))
 
     const resolve = (ref?: string): El | undefined => {
@@ -827,6 +903,22 @@ export class BoardController {
     return this.present(`Drawing: ${input.title}`, stepId, () => {
       const warnings: string[] = []
       const { groups, all, existingPatches } = this.build(input.shapes, { ...input, step: stepId }, warnings)
+      if (!all.length) return { groups: [], patches: [], result: { ok: false, error: "Nothing could be drawn.", warnings } }
+      return {
+        groups,
+        patches: existingPatches,
+        after: () => this.addStep({ id: stepId, title: input.title, kind: "draw", elementIds: all.map((e) => e.id) }),
+        result: { ok: true, ...this.summary(all), ...(warnings.length ? { warnings } : {}) },
+      }
+    })
+  }
+
+  /** Board components (steps, flow, cycle, table…): laid out here, drawn like `draw`. */
+  compose(input: ComposeInput, stepId: string): Promise<ToolResult> {
+    return this.present(`Drawing: ${input.title}`, stepId, () => {
+      const warnings: string[] = []
+      const shapes = layoutBlocks(input)
+      const { groups, all, existingPatches } = this.build(shapes, { near: input.near, placement: input.placement, step: stepId }, warnings)
       if (!all.length) return { groups: [], patches: [], result: { ok: false, error: "Nothing could be drawn.", warnings } }
       return {
         groups,
